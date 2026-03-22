@@ -1,0 +1,41 @@
+{
+  "buffer_minutes": 15,
+  "units": "imperial",
+  "traffic_model": "best_guess",
+  "results": [
+    {
+      "name": "DC → Richmond (tight-should-fail in app)",
+      "origin": "Washington, DC",
+      "destination": "Richmond, VA",
+      "departure_time": "2025-10-12T16:00:00.000Z",
+      "ok": false,
+      "apiStatus": "REQUEST_DENIED",
+      "legStatus": "NO_LEG_STATUS",
+      "raw": {
+        "destination_addresses": [],
+        "error_message": "API keys with referer restrictions cannot be used with this API.",
+        "origin_addresses": [],
+        "rows": [],
+        "status": "REQUEST_DENIED"
+      },
+      "note": "API or leg status not OK"
+    },
+    {
+      "name": "Richmond → Norfolk",
+      "origin": "Richmond, VA",
+      "destination": "Norfolk, VA",
+      "departure_time": "2025-10-12T17:30:00.000Z",
+      "ok": false,
+      "apiStatus": "REQUEST_DENIED",
+      "legStatus": "NO_LEG_STATUS",
+      "raw": {
+        "destination_addresses": [],
+        "error_message": "API keys with referer restrictions cannot be used with this API.",
+        "origin_addresses": [],
+        "rows": [],
+        "status": "REQUEST_DENIED"
+      },
+      "note": "API or leg status not OK"
+    }
+  ]
+}
