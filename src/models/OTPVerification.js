@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 
 // Define the OTP Verification schema
 const otpVerificationSchema = new mongoose.Schema({
+  purpose: {
+    type: String,
+    enum: ['signup', 'login'],
+    default: 'signup',
+    index: true
+  },
   phone: { 
     type: String, 
     required: true, 
@@ -24,6 +30,11 @@ const otpVerificationSchema = new mongoose.Schema({
     type: Boolean, 
     default: false 
   },
+  payload: {
+    email: { type: String, default: null },
+    name: { type: String, default: null },
+    role: { type: String, default: 'customer' }
+  },
   createdAt: { 
     type: Date, 
     default: Date.now 
@@ -31,6 +42,6 @@ const otpVerificationSchema = new mongoose.Schema({
 });
 
 // Index for efficient queries
-otpVerificationSchema.index({ phone: 1, createdAt: -1 });
+otpVerificationSchema.index({ phone: 1, purpose: 1, createdAt: -1 });
 
 module.exports = mongoose.model('OTPVerification', otpVerificationSchema);

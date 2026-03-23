@@ -1,19 +1,37 @@
 const twilio = require('twilio');
 
+const clean = (value) =>
+  String(value || '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '');
+
 // Twilio configuration - using environment variables for security
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
-const messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-const fromPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
-// Initialize Twilio client
-let client;
-try {
+const accountSid = clean(process.env.TWILIO_ACCOUNT_SID);
+const authToken = clean(process.env.TWILIO_AUTH_TOKEN);
+const messagingServiceSid = clean(process.env.TWILIO_MESSAGING_SERVICE_SID);
+const fromPhoneNumber = clean(process.env.TWILIO_PHONE_NUMBER);
+const apiKeySid = clean(process.env.TWILIO_API_KEY_SID);
+const apiKeySecret = clean(process.env.TWILIO_API_KEY_SECRET);
+let client = null;
+
+const getClient = () => {
+  if (client) return client;
+
+  // Prefer API key auth if provided, otherwise fallback to Account SID + Auth Token
+  if (apiKeySid && apiKeySecret && accountSid) {
+    client = twilio(apiKeySid, apiKeySecret, { accountSid });
+    return client;
+  }
+
+  if (!accountSid || !authToken) {
+    throw new Error(
+      'Missing Twilio credentials. Set either TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN or TWILIO_API_KEY_SID + TWILIO_API_KEY_SECRET + TWILIO_ACCOUNT_SID.'
+    );
+  }
+
   client = twilio(accountSid, authToken);
-  console.log('Twilio client initialized successfully');
-} catch (error) {
-  console.error('Failed to initialize Twilio client:', error.message);
-  client = null;
-}
+  return client;
+};
 
 /**
  * Generate a 6-digit OTP code
@@ -33,27 +51,39 @@ const generateOTP = () => {
 
 const sendOTP = async (phoneNumber, otpCode) => {
   try {
-    // Format phone number (ensure it starts with +)
-    let formattedPhone = phoneNumber;
-    //  console.log(object)
-    let message;
-    message = await client.messages.create({
-      body: `Your Swift Haven verification code is: ${otpCode}. This code will expire in 5 minutes.`,
-      from: fromPhoneNumber,
+    let formattedPhone = String(phoneNumber || '').trim();
+    if (!formattedPhone.startsWith('+')) {
+      formattedPhone = `+${formattedPhone}`;
+    }
+
+    const messagePayload = {
+      body: `Your Aleet verification code is: ${otpCode}. This code will expire in 5 minutes.`,
       to: formattedPhone,
-    });
-    console.log('Messaging service failed, trying with phone number...');
+    };
 
+    console.log(messagePayload)
 
-    // console.log(`OTP sent successfully to ${formattedPhone}. Message SID: ${message.sid}`);
+    if (messagingServiceSid) {
+      messagePayload.messagingServiceSid = messagingServiceSid;
+    } else if (fromPhoneNumber) {
+      messagePayload.from = fromPhoneNumber;
+    } else {
+      throw new Error('Missing TWILIO_MESSAGING_SERVICE_SID or TWILIO_PHONE_NUMBER');
+    }
+
+    await getClient().messages.create(messagePayload);
 
     return {
       success: true,
-      // messageSid: message.sid,
       phoneNumber: formattedPhone
     };
   } catch (error) {
     console.error('Twilio SMS Error:', error);
+    if (error?.code === 20003) {
+      throw new Error(
+        'Failed to send OTP: Twilio authentication failed. Check TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.'
+      );
+    }
     throw new Error(`Failed to send OTP: ${error.message}`);
   }
 };

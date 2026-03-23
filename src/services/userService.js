@@ -38,14 +38,18 @@ const register = async (body, files) => {
   const { name, email, phone, password, role, vehicleTypes, permissions, ssn } =
     body;
 
-  // Duplicate check - only check phone for phone-based registration
+  // Duplicate check for phone and optional email
   const existing = await User.findOne({ phone });
   if (existing) throw new Error("User with this phone number already exists");
+  if (email) {
+    const existingByEmail = await User.findOne({ email: String(email).trim().toLowerCase() });
+    if (existingByEmail) throw new Error("User with this email already exists");
+  }
 
   // Create user with phone-based registration
   const user = new User({
     name: name || "", // Optional name
-    email: email || null, // Optional email
+    email: email ? String(email).trim().toLowerCase() : null, // Optional email
     phone,
     password: password || null, // Optional password
     role: role || "customer",

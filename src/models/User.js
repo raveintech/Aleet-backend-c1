@@ -9,6 +9,8 @@ const userSchema = new mongoose.Schema(
     phone: { type: String, required: true, unique: true },
     password: { type: String, required: false }, // Made optional for phone-only auth
     isPhoneVerified: { type: Boolean, default: false }, // Track phone verification status
+    resetPasswordToken: { type: String, default: null },
+    resetPasswordExpires: { type: Date, default: null },
 
     // Role to differentiate between Admin, Driver, Customer
     role: {

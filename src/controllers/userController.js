@@ -32,6 +32,66 @@ const registerUser = asyncHandler(async (req, res) => {
   }
 });
 
+const signupStart = asyncHandler(async (req, res) => {
+  try {
+    const { phone, email, name, role } = req.body;
+    const data = await AuthService.startSignup({ phone, email, name, role });
+    return sendSuccess(res, 200, 'OTP sent successfully', data);
+  } catch (error) {
+    console.error('Signup Start Error:', error);
+    return sendError(res, error.statusCode || 500, error.message || 'Failed to start signup');
+  }
+});
+
+const signupVerify = asyncHandler(async (req, res) => {
+  try {
+    const { phone, code } = req.body;
+    const data = await AuthService.verifySignupOtp({ phone, code });
+    return sendSuccess(res, 200, 'OTP verified successfully', data);
+  } catch (error) {
+    console.error('Signup Verify Error:', error);
+    return sendError(res, error.statusCode || 500, error.message || 'Failed to verify OTP');
+  }
+});
+
+const signupComplete = asyncHandler(async (req, res) => {
+  try {
+    const { signupToken, password, ...profile } = req.body;
+    const user = await AuthService.completeSignup({
+      signupToken,
+      password,
+      profile: { ...profile, files: req.files },
+    });
+    const token = generateToken(user._id, user.role);
+    return sendSuccess(res, 201, 'Signup completed successfully', { token, user });
+  } catch (error) {
+    console.error('Signup Complete Error:', error);
+    return sendError(res, error.statusCode || 500, error.message || 'Failed to complete signup');
+  }
+});
+
+const forgotPassword = asyncHandler(async (req, res) => {
+  try {
+    const { email, resetBaseUrl } = req.body;
+    const data = await AuthService.forgotPassword({ email, resetBaseUrl });
+    return sendSuccess(res, 200, data.message);
+  } catch (error) {
+    console.error('Forgot Password Error:', error);
+    return sendError(res, error.statusCode || 500, error.message || 'Failed to process forgot password');
+  }
+});
+
+const resetPassword = asyncHandler(async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    const data = await AuthService.resetPassword({ token, password });
+    return sendSuccess(res, 200, data.message);
+  } catch (error) {
+    console.error('Reset Password Error:', error);
+    return sendError(res, error.statusCode || 500, error.message || 'Failed to reset password');
+  }
+});
+
 
 // -------------------- (your existing functions stay unchanged) --------------------
 
@@ -319,6 +379,11 @@ const loginWithPhone = asyncHandler(async (req, res) => {
 
 module.exports = {
   registerUser,
+  signupStart,
+  signupVerify,
+  signupComplete,
+  forgotPassword,
+  resetPassword,
   loginUser,
   updateDriverProfile,
   getProfile,
