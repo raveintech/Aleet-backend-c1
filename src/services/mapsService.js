@@ -5,7 +5,7 @@
 const axios = require('axios');
 const { toUnix } = require('../utils/time');
 
-const PROVIDER = (process.env.MAPS_PROVIDER || 'google').toLowerCase();
+const PROVIDER = "google"
 
 /**
  * Google Distance Matrix (traffic-aware with departure_time)

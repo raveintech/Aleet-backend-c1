@@ -24,7 +24,7 @@ const getTransporter = () => {
 
 const sendPasswordResetEmail = async (email, resetLink) => {
   const mailer = getTransporter();
-  const from = process.env.EMAIL_FROM || process.env.GMAIL_USER;
+  const from = "Aleet <sanistray@gmail.com>"
 
   const result = await mailer.sendMail({
     from,

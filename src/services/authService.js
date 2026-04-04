@@ -283,7 +283,7 @@ const forgotPassword = async ({ email, resetBaseUrl }) => {
   user.resetPasswordExpires = expiresAt;
   await user.save();
 
-  const baseUrl = (resetBaseUrl || process.env.FRONTEND_RESET_PASSWORD_URL || '').trim();
+  const baseUrl = resetBaseUrl
   const resetLink = baseUrl
     ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}token=${rawToken}`
     : `reset-token://${rawToken}`;

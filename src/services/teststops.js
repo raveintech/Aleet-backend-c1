@@ -25,9 +25,9 @@ require("dotenv").config();
 
 // ====== CONFIG ======
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
-const BUFFER_MINUTES = Number(process.env.BUFFER_MINUTES || 15);
-const UNITS = process.env.UNITS || "imperial"; // imperial | metric
-const TRAFFIC_MODEL = process.env.TRAFFIC_MODEL || "best_guess"; // best_guess | pessimistic | optimistic
+const BUFFER_MINUTES = 15
+const UNITS = "imperial"
+const TRAFFIC_MODEL = "best_guess"
 
 // Test legs — feel free to edit/extend:
 const TEST_LEGS = [

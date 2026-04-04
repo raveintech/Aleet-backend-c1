@@ -1,42 +1,60 @@
-name: My Personal Backend Deployment
+name: Aleet Deploy
 
 on:
   push:
     branches:
-      - main
+      - dev
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '22'
+      - name: Generate .env.local
+        run: |
+          cat > $GITHUB_WORKSPACE/.env.local << 'EOF'
+          # ─── Server ───────────────────────────────────────────────────
+          SSH_HOST=${{ secrets.SSH_HOST }}
+          SSH_USER=${{ secrets.SSH_USER }}
+          SSH_KEY=${{ secrets.SSH_KEY }}
+          PORT=${{ vars.PORT }}
+          APP_BASE_URL=${{ vars.APP_BASE_URL }}
+
+          # ─── MongoDB ──────────────────────────────────────────────────
+          MONGODB_URI=${{ secrets.MONGODB_URI }}
+
+          # ─── JWT ──────────────────────────────────────────────────────
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+
+          # ─── Stripe ───────────────────────────────────────────────────
+          STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET=${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          CURRENCY=${{ vars.CURRENCY }}
+
+          # ─── Twilio ───────────────────────────────────────────────────
+          TWILIO_ACCOUNT_SID=${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN=${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_MESSAGING_SERVICE_SID=${{ secrets.TWILIO_MESSAGING_SERVICE_SID }}
+          TWILIO_PHONE_NUMBER=${{ vars.TWILIO_PHONE_NUMBER }}
+
+          # ─── Checkr ───────────────────────────────────────────────────
+          CHECKR_BASE_URL=${{ vars.CHECKR_BASE_URL }}
+          CHECKR_API_KEY=${{ secrets.CHECKR_API_KEY }}
+          CHECKR_DASHBOARD_BASE=${{ vars.CHECKR_DASHBOARD_BASE }}
+
+          # ─── Google Maps ──────────────────────────────────────────────
+          GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}
+
+          # ─── Email ────────────────────────────────────────────────────
+          GMAIL_USER=${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD=${{ secrets.GMAIL_APP_PASSWORD }}
+          EOF
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --omit=dev
 
-      - name: Deploy to EC2
-        uses: appleboy/scp-action@v0.1.4
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_KEY }}
-          source: "."
-          target: "/my-personal-backend-node"
-
-      - name: Restart App on EC2 via SSH
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            cd /my-personal-backend-node
-            npm install
-            pm2 restart my-personal-backend
+      - name: Restart app with PM2
+        run: pm2 restart aleet-backend || pm2 start $GITHUB_WORKSPACE/src/server.js --name aleet-backend

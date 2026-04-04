@@ -26,11 +26,11 @@ const checkr = axios.create({
   },
 });
 
-const defaultCountry = process.env.CHECKR_DEFAULT_COUNTRY || 'US';
-const defaultState = process.env.CHECKR_DEFAULT_STATE || 'CA';
-const defaultCity = process.env.CHECKR_DEFAULT_CITY || 'San Francisco';
-const defaultPackage = process.env.CHECKR_DEFAULT_PACKAGE || 'basic_plus_criminal';
-const defaultNodeId = process.env.CHECKR_NODE_ID || null;
+const defaultCountry = 'US';
+const defaultState = 'CA';
+const defaultCity = 'San Francisco';
+const defaultPackage = 'basic_plus_criminal';
+const defaultNodeId = null
 
 // Build work location object per Checkr guidance
 function buildWorkLocation(user) {
