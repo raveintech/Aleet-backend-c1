@@ -41,6 +41,26 @@ const sendPasswordResetEmail = async (email, resetLink) => {
   return { success: true, messageId: result.messageId };
 };
 
+const sendVerificationCodeEmail = async (email, code) => {
+  const mailer = getTransporter();
+  const from = 'Aleet <sanistray@gmail.com>';
+
+  const result = await mailer.sendMail({
+    from,
+    to: email,
+    subject: 'Your Aleet verification code',
+    text: `Your verification code is: ${code}\nThis code expires in 10 minutes.`,
+    html: `
+      <p>Your Aleet verification code:</p>
+      <h2 style="letter-spacing:4px;">${code}</h2>
+      <p>This code expires in 10 minutes. Do not share it with anyone.</p>
+    `,
+  });
+
+  return { success: true, messageId: result.messageId };
+};
+
 module.exports = {
   sendPasswordResetEmail,
+  sendVerificationCodeEmail,
 };

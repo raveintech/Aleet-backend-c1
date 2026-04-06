@@ -1,6 +1,26 @@
 const mongoose = require("mongoose");
 const User = require("../models/User");
 
+const normalizePhone = (raw) => {
+  if (!raw) return null;
+  const digits = String(raw).replace(/[^\d]/g, '');
+  if (!digits) return null;
+
+  if (String(raw).trimStart().startsWith('+')) {
+    return '+' + digits;
+  }
+
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return '+' + digits;
+  }
+
+  if (digits.length === 10) {
+    return '+1' + digits;
+  }
+
+  return '+' + digits;
+};
+
 // Parse vehicleTypes
 const parseVehicleTypes = (vehicleTypes) => {
   if (!vehicleTypes) return [];
@@ -39,7 +59,10 @@ const register = async (body, files) => {
     body;
 
   // Duplicate check for phone and optional email
-  const existing = await User.findOne({ phone });
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) throw new Error("Invalid phone number");
+
+  const existing = await User.findOne({ phone: normalizedPhone });
   if (existing) throw new Error("User with this phone number already exists");
   if (email) {
     const existingByEmail = await User.findOne({ email: String(email).trim().toLowerCase() });
@@ -48,9 +71,9 @@ const register = async (body, files) => {
 
   // Create user with phone-based registration
   const user = new User({
-    name: name || "", // Optional name
-    email: email ? String(email).trim().toLowerCase() : null, // Optional email
-    phone,
+    name: name || "",
+    email: email ? String(email).trim().toLowerCase() : null,
+    phone: normalizedPhone,
     password: password || null, // Optional password
     role: role || "customer",
     isPhoneVerified: false, // Will be set to true after OTP verification
@@ -104,15 +127,18 @@ const findByEmail = async (email) => {
   return await User.findOne({ email });
 };
 
-// Find by phone number
+// Find by phone number — always normalizes before querying
 const findByPhone = async (phone) => {
-  return await User.findOne({ phone });
+  const normalized = normalizePhone(phone);
+  if (!normalized) return null;
+  return await User.findOne({ phone: normalized });
 };
 
-// Update phone verification status
+// Update phone verification status — normalizes phone before update
 const updatePhoneVerification = async (phone, isVerified = true) => {
+  const normalized = normalizePhone(phone);
   return await User.findOneAndUpdate(
-    { phone },
+    { phone: normalized },
     { isPhoneVerified: isVerified },
     { new: true }
   );
@@ -134,6 +160,7 @@ const formatUser = (user) => {
 };
 
 module.exports = {
+  normalizePhone,
   register,
   findByEmail,
   findByPhone,

@@ -8,40 +8,46 @@ const otpVerificationSchema = new mongoose.Schema({
     default: 'signup',
     index: true
   },
-  phone: { 
-    type: String, 
-    required: true, 
-    index: true 
+  phone: {
+    type: String,
+    default: null,
+    index: true
   },
-  code: { 
-    type: String, 
-    required: true 
+  email: {
+    type: String,
+    default: null,
+    index: true
   },
-  expiresAt: { 
-    type: Date, 
+  code: {
+    type: String,
+    required: true
+  },
+  expiresAt: {
+    type: Date,
     required: true,
     index: { expireAfterSeconds: 0 } // Auto-delete expired documents
   },
-  attempts: { 
-    type: Number, 
-    default: 0 
+  attempts: {
+    type: Number,
+    default: 0
   },
-  verified: { 
-    type: Boolean, 
-    default: false 
+  verified: {
+    type: Boolean,
+    default: false
   },
   payload: {
     email: { type: String, default: null },
     name: { type: String, default: null },
     role: { type: String, default: 'customer' }
   },
-  createdAt: { 
-    type: Date, 
-    default: Date.now 
+  createdAt: {
+    type: Date,
+    default: Date.now
   }
 });
 
 // Index for efficient queries
 otpVerificationSchema.index({ phone: 1, purpose: 1, createdAt: -1 });
+otpVerificationSchema.index({ email: 1, purpose: 1, createdAt: -1 });
 
 module.exports = mongoose.model('OTPVerification', otpVerificationSchema);

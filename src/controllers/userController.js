@@ -3,11 +3,10 @@
 const asyncHandler = require('express-async-handler');
 const bcrypt = require('bcryptjs');
 const UserService = require('../services/userService');
+const { normalizePhone } = require('../services/userService');
 const AuthService = require('../services/authService');
 const generateToken = require('../utils/generateToken');
 const User = require('../models/User');
-const OTPVerification = require('../models/OTPVerification');
-const { generateOTP, sendOTP, sendWelcomeSMS } = require('../services/twilioService');
 const {
   sendSuccess,
   sendError,
@@ -34,9 +33,9 @@ const registerUser = asyncHandler(async (req, res) => {
 
 const signupStart = asyncHandler(async (req, res) => {
   try {
-    const { phone, email, name, role } = req.body;
-    const data = await AuthService.startSignup({ phone, email, name, role });
-    return sendSuccess(res, 200, 'OTP sent successfully', data);
+    const { identifier, name, role } = req.body;
+    const data = await AuthService.startSignup({ identifier, name, role });
+    return sendSuccess(res, 200, 'Verification code sent successfully', data);
   } catch (error) {
     console.error('Signup Start Error:', error);
     return sendError(res, error.statusCode || 500, error.message || 'Failed to start signup');
@@ -45,25 +44,39 @@ const signupStart = asyncHandler(async (req, res) => {
 
 const signupVerify = asyncHandler(async (req, res) => {
   try {
-    const { phone, code } = req.body;
-    const data = await AuthService.verifySignupOtp({ phone, code });
-    return sendSuccess(res, 200, 'OTP verified successfully', data);
+    const { identifier, code } = req.body;
+    const data = await AuthService.verifySignupOtp({ identifier, code });
+    return sendSuccess(res, 200, 'Code verified successfully', data);
   } catch (error) {
     console.error('Signup Verify Error:', error);
-    return sendError(res, error.statusCode || 500, error.message || 'Failed to verify OTP');
+    return sendError(res, error.statusCode || 500, error.message || 'Failed to verify code');
   }
 });
 
+// Step 3 — Set passcode
+const signupPasscode = asyncHandler(async (req, res) => {
+  try {
+    const { signupToken, password } = req.body;
+    const data = await AuthService.setPasscode({ signupToken, password });
+    return sendSuccess(res, 200, 'Passcode set successfully', data);
+  } catch (error) {
+    console.error('Signup Passcode Error:', error);
+    return sendError(res, error.statusCode || 500, error.message || 'Failed to set passcode');
+  }
+});
+
+// Step 4 — Complete signup: name + email (email required for phone-flow users)
 const signupComplete = asyncHandler(async (req, res) => {
   try {
-    const { signupToken, password, ...profile } = req.body;
+    const { tempToken, name, email, ...profile } = req.body;
     const user = await AuthService.completeSignup({
-      signupToken,
-      password,
+      tempToken,
+      name,
+      email,
       profile: { ...profile, files: req.files },
     });
     const token = generateToken(user._id, user.role);
-    return sendSuccess(res, 201, 'Signup completed successfully', { token, user });
+    return sendSuccess(res, 201, 'Account created successfully', { token, user });
   } catch (error) {
     console.error('Signup Complete Error:', error);
     return sendError(res, error.statusCode || 500, error.message || 'Failed to complete signup');
@@ -95,20 +108,64 @@ const resetPassword = asyncHandler(async (req, res) => {
 
 // -------------------- (your existing functions stay unchanged) --------------------
 
-// Login (unchanged)
+// Check if account exists by email or phone
+const checkUser = asyncHandler(async (req, res) => {
+  try {
+    const { identifier } = req.body;
+    const raw = (identifier || '').toString().trim();
+
+    if (!raw) {
+      return sendValidationError(res, 'Identifier (email or phone) is required');
+    }
+
+    const isEmail = raw.includes('@');
+
+    let user;
+    if (isEmail) {
+      user = await UserService.findByEmail(raw.toLowerCase());
+    } else {
+      const normalizedPhone = normalizePhone(raw);
+      if (!normalizedPhone) {
+        return sendValidationError(res, 'Invalid phone number format');
+      }
+      user = await UserService.findByPhone(normalizedPhone);
+    }
+
+    return sendSuccess(res, 200, 'Check complete', {
+      exists: !!user,
+      type: isEmail ? 'email' : 'phone',
+    });
+  } catch (error) {
+    console.error('Check User Error:', error);
+    return sendError(res, 500, error.message || 'Failed to check user');
+  }
+});
+
+
 const loginUser = asyncHandler(async (req, res) => {
   try {
-    const { email, phone, identifier, password } = req.body;
-    const loginIdentifier = identifier || email || phone;
+    const { identifier, email, phone, password } = req.body;
 
-    if (!loginIdentifier || !password) {
+    // Accept identifier, or legacy email/phone fields
+    const raw = (identifier || email || phone || '').toString().trim();
+
+    if (!raw || !password) {
       return sendValidationError(res, 'Identifier (email or phone) and password are required');
     }
 
-    const isPhoneLogin = /^\+?\d[\d\s\-()]{6,}$/.test(String(loginIdentifier));
-    const user = isPhoneLogin
-      ? await UserService.findByPhone(String(loginIdentifier).trim())
-      : await UserService.findByEmail(String(loginIdentifier).trim().toLowerCase());
+    // Detect type: if it contains @ → email, otherwise treat as phone
+    const isEmail = raw.includes('@');
+
+    let user;
+    if (isEmail) {
+      user = await UserService.findByEmail(raw.toLowerCase());
+    } else {
+      const normalizedPhone = normalizePhone(raw);
+      if (!normalizedPhone) {
+        return sendValidationError(res, 'Invalid phone number format');
+      }
+      user = await UserService.findByPhone(normalizedPhone);
+    }
 
     if (!user) {
       return sendUnauthorized(res, 'Invalid credentials');
@@ -186,209 +243,15 @@ const getProfile = asyncHandler(async (req, res) => {
   }
 });
 
-// -------------------- PHONE-BASED AUTHENTICATION --------------------
-
-// Send OTP for signup/login
-const sendOTPForAuth = asyncHandler(async (req, res) => {
-  try {
-    const { phone } = req.body;
-
-    if (!phone) {
-      return sendValidationError(res, 'Phone number is required');
-    }
-
-    // Generate 6-digit OTP
-    const otpCode = generateOTP();
-    
-    // Set expiration time (5 minutes from now)
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
-    // Delete any existing OTP for this phone number
-    await OTPVerification.deleteMany({ phone });
-
-    // Save new OTP
-    const otpVerification = new OTPVerification({
-      phone,
-      code: otpCode,
-      expiresAt
-    });
-
-    await otpVerification.save();
-
-    // Send OTP via SMS
-    await sendOTP(phone, otpCode);
-
-    return sendSuccess(res, 200, 'OTP sent successfully', {
-      phone,
-      expiresIn: '5 minutes'
-    });
-  } catch (error) {
-    console.error('Send OTP Error:', error);
-    return sendError(res, 500, error.message || 'Failed to send OTP');
-  }
-});
-
-// Verify OTP and complete signup/login
-const verifyOTPAndAuth = asyncHandler(async (req, res) => {
-  try {
-    const { phone, code } = req.body;
-
-    if (!phone || !code) {
-      return sendValidationError(res, 'Phone number and OTP code are required');
-    }
-
-    // Find the OTP verification record
-    const otpRecord = await OTPVerification.findOne({
-      phone,
-      code,
-      verified: false,
-      expiresAt: { $gt: new Date() }
-    });
-
-    if (!otpRecord) {
-      return sendUnauthorized(res, 'Invalid or expired OTP');
-    }
-
-    // Check attempt limit (max 3 attempts)
-    if (otpRecord.attempts >= 3) {
-      await OTPVerification.deleteOne({ _id: otpRecord._id });
-      return sendUnauthorized(res, 'Too many failed attempts. Please request a new OTP.');
-    }
-
-    // Increment attempts
-    otpRecord.attempts += 1;
-    await otpRecord.save();
-
-    // Check if user exists
-    let user = await UserService.findByPhone(phone);
-    let isNewUser = false;
-
-    if (!user) {
-      // Create new user
-      isNewUser = true;
-      const newUserData = {
-        phone,
-        role: 'customer', // Default role
-        isPhoneVerified: true
-      };
-
-      user = await UserService.register(newUserData);
-      
-      // Send welcome SMS for new users
-      try {
-        await sendWelcomeSMS(phone, user.name || 'User');
-      } catch (welcomeError) {
-        console.error('Welcome SMS failed:', welcomeError);
-        // Don't fail the registration for welcome SMS error
-      }
-    } else {
-      // Update existing user's phone verification status
-      await UserService.updatePhoneVerification(phone, true);
-    }
-
-    // Mark OTP as verified
-    otpRecord.verified = true;
-    await otpRecord.save();
-
-    // Generate JWT token
-    const token = generateToken(user._id, user.role);
-    const userData = UserService.formatUser(user);
-
-    return sendSuccess(res, 200, isNewUser ? 'Account created and verified successfully' : 'Login successful', {
-      token,
-      user: userData,
-      isNewUser
-    });
-  } catch (error) {
-    console.error('Verify OTP Error:', error);
-    return sendError(res, 500, error.message || 'OTP verification failed');
-  }
-});
-
-// Add email to existing account (optional)
-const addEmailToAccount = asyncHandler(async (req, res) => {
-  try {
-    const { email } = req.body;
-    const userId = req.user.id;
-
-    if (!email) {
-      return sendValidationError(res, 'Email is required');
-    }
-
-    // Check if email already exists
-    const existingUser = await User.findOne({ email, _id: { $ne: userId } });
-    if (existingUser) {
-      return sendError(res, 400, 'Email already exists');
-    }
-
-    // Update user with email
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { email },
-      { new: true }
-    );
-
-    if (!user) {
-      return sendNotFound(res, 'User not found');
-    }
-
-    const userData = UserService.formatUser(user);
-    return sendSuccess(res, 200, 'Email added successfully', userData);
-  } catch (error) {
-    console.error('Add Email Error:', error);
-    return sendError(res, 500, error.message || 'Failed to add email');
-  }
-});
-
-// Phone-based login (alternative to OTP verification)
-const loginWithPhone = asyncHandler(async (req, res) => {
-  try {
-    const { phone, password } = req.body;
-
-    if (!phone || !password) {
-      return sendValidationError(res, 'Phone number and password are required');
-    }
-
-    const user = await UserService.findByPhone(phone);
-    if (!user) {
-      return sendUnauthorized(res, 'Invalid credentials');
-    }
-
-    if (!user.password) {
-      return sendUnauthorized(res, 'Password login is not configured for this account');
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return sendUnauthorized(res, 'Invalid credentials');
-    }
-
-    // Generate JWT token
-    const token = generateToken(user._id, user.role);
-    const userData = UserService.formatUser(user);
-
-    return sendSuccess(res, 200, 'Login successful', {
-      token,
-      user: userData
-    });
-  } catch (error) {
-    console.error('Phone Login Error:', error);
-    return sendError(res, 500, error.message || 'Login failed');
-  }
-});
-
 module.exports = {
-  registerUser,
   signupStart,
   signupVerify,
+  signupPasscode,
   signupComplete,
   forgotPassword,
   resetPassword,
   loginUser,
   updateDriverProfile,
   getProfile,
-  sendOTPForAuth,
-  verifyOTPAndAuth,
-  addEmailToAccount,
-  loginWithPhone,
+  checkUser,
 };

@@ -3,9 +3,10 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const OTPVerification = require('../models/OTPVerification');
 const UserService = require('./userService');
+const { normalizePhone } = UserService;
 const Checkr = require('./checkrService');
 const { generateOTP, sendOTP } = require('./twilioService');
-const { sendPasswordResetEmail } = require('./emailService');
+const { sendPasswordResetEmail, sendVerificationCodeEmail } = require('./emailService');
 
 class AuthServiceError extends Error {
   constructor(message, statusCode = 500) {
@@ -122,69 +123,101 @@ const registerUser = async (body, files) => {
 const isValidEmail = (email) =>
   typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-const normalizePhone = (phone) => String(phone || '').trim();
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 
-const startSignup = async ({ phone, email, name, role = 'customer' }) => {
-  const normalizedPhone = normalizePhone(phone);
-  const normalizedEmail = normalizeEmail(email);
+const startSignup = async ({ identifier, name, role = 'customer' }) => {
+  const raw = String(identifier || '').trim();
+  if (!raw) {
+    throw new AuthServiceError('Phone number or email is required', 400);
+  }
+
   const normalizedRole = role || 'customer';
+  const isEmail = raw.includes('@');
 
-  if (!normalizedPhone) {
-    throw new AuthServiceError('Phone number is required', 400);
-  }
-  if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
-    throw new AuthServiceError('Valid email is required', 400);
-  }
+  if (isEmail) {
+    // ── EMAIL FLOW ──────────────────────────────────────────────────────────
+    const normalizedEmail = normalizeEmail(raw);
+    if (!isValidEmail(normalizedEmail)) {
+      throw new AuthServiceError('Invalid email address', 400);
+    }
 
-  const existingUser = await User.findOne({
-    $or: [{ phone: normalizedPhone }, { email: normalizedEmail }],
-  }).lean();
-  if (existingUser) {
-    throw new AuthServiceError('User with this phone or email already exists', 409);
-  }
+    const existingUser = await User.findOne({ email: normalizedEmail }).lean();
+    if (existingUser) {
+      throw new AuthServiceError('An account with this email already exists', 409);
+    }
 
-  const otpCode = generateOTP();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    const otpCode = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-  await OTPVerification.deleteMany({ phone: normalizedPhone, purpose: 'signup' });
-  await OTPVerification.create({
-    purpose: 'signup',
-    phone: normalizedPhone,
-    code: otpCode,
-    expiresAt,
-    attempts: 0,
-    verified: false,
-    payload: {
+    await OTPVerification.deleteMany({ email: normalizedEmail, purpose: 'signup' });
+    await OTPVerification.create({
+      purpose: 'signup',
       email: normalizedEmail,
-      name: name || null,
-      role: normalizedRole,
-    },
-  });
+      code: otpCode,
+      expiresAt,
+      attempts: 0,
+      verified: false,
+      payload: { name: name || null, role: normalizedRole },
+    });
 
-  try {
-    await sendOTP(normalizedPhone, otpCode);
-  } catch (error) {
+    try {
+      await sendVerificationCodeEmail(normalizedEmail, otpCode);
+    } catch (error) {
+      await OTPVerification.deleteMany({ email: normalizedEmail, purpose: 'signup' });
+      throw new AuthServiceError(error.message || 'Failed to send verification code', 502);
+    }
+
+    return { identifier: normalizedEmail, identifierType: 'email', expiresIn: '10 minutes' };
+  } else {
+    // ── PHONE FLOW ───────────────────────────────────────────────────────────
+    const normalizedPhone = normalizePhone(raw);
+    if (!normalizedPhone) {
+      throw new AuthServiceError('Invalid phone number', 400);
+    }
+
+    const existingUser = await User.findOne({ phone: normalizedPhone }).lean();
+    if (existingUser) {
+      throw new AuthServiceError('An account with this phone number already exists', 409);
+    }
+
+    const otpCode = generateOTP();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
     await OTPVerification.deleteMany({ phone: normalizedPhone, purpose: 'signup' });
-    throw new AuthServiceError(error.message || 'Failed to send OTP', 502);
-  }
+    await OTPVerification.create({
+      purpose: 'signup',
+      phone: normalizedPhone,
+      code: otpCode,
+      expiresAt,
+      attempts: 0,
+      verified: false,
+      payload: { name: name || null, role: normalizedRole },
+    });
 
-  return {
-    phone: normalizedPhone,
-    expiresIn: '5 minutes',
-  };
+    try {
+      await sendOTP(normalizedPhone, otpCode);
+    } catch (error) {
+      await OTPVerification.deleteMany({ phone: normalizedPhone, purpose: 'signup' });
+      throw new AuthServiceError(error.message || 'Failed to send OTP', 502);
+    }
+
+    return { identifier: normalizedPhone, identifierType: 'phone', expiresIn: '5 minutes' };
+  }
 };
 
-const verifySignupOtp = async ({ phone, code }) => {
-  const normalizedPhone = normalizePhone(phone);
+const verifySignupOtp = async ({ identifier, code }) => {
+  const raw = String(identifier || '').trim();
   const normalizedCode = String(code || '').trim();
 
-  if (!normalizedPhone || !normalizedCode) {
-    throw new AuthServiceError('Phone number and OTP code are required', 400);
+  if (!raw || !normalizedCode) {
+    throw new AuthServiceError('Identifier and OTP code are required', 400);
   }
 
+  const isEmail = raw.includes('@');
+  const lookupField = isEmail ? { email: normalizeEmail(raw) } : { phone: normalizePhone(raw) };
+
   const otpRecord = await OTPVerification.findOne({
-    phone: normalizedPhone,
+    ...lookupField,
     purpose: 'signup',
     verified: false,
     expiresAt: { $gt: new Date() },
@@ -211,8 +244,9 @@ const verifySignupOtp = async ({ phone, code }) => {
   const signupToken = jwt.sign(
     {
       type: 'signup_complete',
-      phone: otpRecord.phone,
-      email: otpRecord.payload?.email || null,
+      identifierType: isEmail ? 'email' : 'phone',
+      phone: isEmail ? null : lookupField.phone,
+      email: isEmail ? lookupField.email : (otpRecord.payload?.email || null),
       name: otpRecord.payload?.name || null,
       role: otpRecord.payload?.role || 'customer',
     },
@@ -220,15 +254,15 @@ const verifySignupOtp = async ({ phone, code }) => {
     { expiresIn: '15m' }
   );
 
-  return { signupToken };
+  return { signupToken, identifierType: isEmail ? 'email' : 'phone' };
 };
 
-const completeSignup = async ({ signupToken, password, profile = {} }) => {
+const setPasscode = async ({ signupToken, password }) => {
   if (!signupToken) {
     throw new AuthServiceError('signupToken is required', 400);
   }
-  if (!password || String(password).length < 8) {
-    throw new AuthServiceError('Password must be at least 8 characters', 400);
+  if (!password || String(password).length < 6) {
+    throw new AuthServiceError('Password must be at least 6 characters', 400);
   }
 
   let decoded;
@@ -239,15 +273,70 @@ const completeSignup = async ({ signupToken, password, profile = {} }) => {
   }
 
   if (decoded.type !== 'signup_complete') {
-    throw new AuthServiceError('Invalid signup token type', 401);
+    throw new AuthServiceError('Invalid token type', 401);
+  }
+
+  // Embed hashed password into the next-step token so we never store plaintext
+  const bcrypt = require('bcryptjs');
+  const hashedPassword = await bcrypt.hash(password, 10);
+
+  const tempToken = jwt.sign(
+    {
+      type: 'signup_passcode_set',
+      identifierType: decoded.identifierType,
+      phone: decoded.phone || null,
+      email: decoded.email || null,
+      role: decoded.role || 'customer',
+      hashedPassword,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: '15m' }
+  );
+
+  return { tempToken };
+};
+
+const completeSignup = async ({ tempToken, name, email, profile = {} }) => {
+  if (!tempToken) {
+    throw new AuthServiceError('tempToken is required', 400);
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(tempToken, process.env.JWT_SECRET);
+  } catch {
+    throw new AuthServiceError('Invalid or expired token', 401);
+  }
+
+  if (decoded.type !== 'signup_passcode_set') {
+    throw new AuthServiceError('Invalid token type', 401);
+  }
+
+  // Phone-flow: email is required for account recovery
+  let resolvedEmail = decoded.email;
+  if (decoded.identifierType === 'phone') {
+    const normalizedEmail = normalizeEmail(email || '');
+    if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
+      throw new AuthServiceError('Valid email is required', 400);
+    }
+    const conflict = await User.findOne({ email: normalizedEmail }).lean();
+    if (conflict) {
+      throw new AuthServiceError('An account with this email already exists', 409);
+    }
+    resolvedEmail = normalizedEmail;
+  }
+
+  const resolvedName = String(name || '').trim();
+  if (!resolvedName) {
+    throw new AuthServiceError('Name is required', 400);
   }
 
   const body = {
-    name: profile.name || decoded.name || '',
-    email: decoded.email,
+    name: resolvedName,
+    email: resolvedEmail,
     phone: decoded.phone,
-    password,
-    role: profile.role || decoded.role || 'customer',
+    password: null,
+    role: decoded.role || 'customer',
     vehicleTypes: profile.vehicleTypes,
     permissions: profile.permissions,
     ssn: profile.ssn,
@@ -256,9 +345,16 @@ const completeSignup = async ({ signupToken, password, profile = {} }) => {
   validateRegistrationInput(body);
 
   let user = await registerUser(body, profile.files);
-  await User.findByIdAndUpdate(user._id, { $set: { isPhoneVerified: true } });
-  user = await User.findById(user._id);
 
+  await User.findByIdAndUpdate(user._id, {
+    $set: {
+      password: decoded.hashedPassword,
+      isPhoneVerified: decoded.identifierType === 'phone',
+      isEmailVerified: decoded.identifierType === 'email',
+    },
+  });
+
+  user = await User.findById(user._id);
   return UserService.formatUser(user);
 };
 
@@ -270,7 +366,6 @@ const forgotPassword = async ({ email, resetBaseUrl }) => {
 
   const user = await User.findOne({ email: normalizedEmail });
 
-  // Don't leak whether email exists
   if (!user) {
     return { message: 'If this email exists, a password reset link has been sent.' };
   }
@@ -324,6 +419,7 @@ module.exports = {
   AuthServiceError,
   startSignup,
   verifySignupOtp,
+  setPasscode,
   completeSignup,
   forgotPassword,
   resetPassword,
