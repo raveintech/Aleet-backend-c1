@@ -1,18 +1,39 @@
 const express = require('express');
-const { startBooking, confirmBooking, acceptBooking, getAllBookings, previewBooking, completeBooking } = require('../controllers/bookingController');
-const authenticateJWT = require('../middleware/authMiddleware');  // Use JWT middleware for protection
+const {
+    startBooking,
+    confirmBooking,
+    acceptBooking,
+    getAllBookings,
+    getMyBookings,
+    getBookingById,
+    previewBooking,
+    completeBooking
+} = require('../controllers/bookingController');
+const authenticateJWT = require('../middleware/authMiddleware');
 const router = express.Router();
 
-// Route for starting a booking
+// Price preview (no persist)
+router.post('/preview', authenticateJWT, previewBooking);
+
+// Create booking
 router.post('/start', authenticateJWT, startBooking);
 
-// Route for confirming a booking (driver or admin)
+// My bookings (authenticated user)
+router.get('/my', authenticateJWT, getMyBookings);
+
+// Admin — all bookings
+router.get('/', authenticateJWT, getAllBookings);
+
+// Single booking (owner or admin)
+router.get('/:id', authenticateJWT, getBookingById);
+
+// Confirm booking (admin assigns driver, or driver self-assigns)
 router.post('/confirm', authenticateJWT, confirmBooking);
 
-// Route for driver accepting or declining the booking
+// Driver accepts or declines
 router.post('/accept', authenticateJWT, acceptBooking);
-router.get('/bookings', authenticateJWT, getAllBookings);
-router.post('/preview', authenticateJWT, previewBooking);
-router.post('/completeBooking', authenticateJWT, completeBooking);
+
+// Complete booking
+router.patch('/:id/complete', authenticateJWT, completeBooking);
 
 module.exports = router;

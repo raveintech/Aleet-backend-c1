@@ -26,6 +26,7 @@ const subscriptionRoutes = require('./routes/subscriptionRoutes.js');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const paymentsRoutes = require('./routes/payments.routes');
 const payoutRoutes = require('./routes/payoutRoutes');
+const regionRoutes = require('./routes/regionRoutes');
 const PaymentsController = require('./controllers/payments.controller');
 
 const { errorHandler, notFound } = require('./middleware/errorHandler');
@@ -52,7 +53,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // Routes
 app.use('/api/users', userRoutes);
 app.use('/api/auth', authRoutes);
-app.use('/api/vehicleTypes', vehicleTypeRoutes);
+app.use('/api/vehicle-types', vehicleTypeRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/addons', addOnRoutes);
@@ -62,6 +63,7 @@ app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api/payout', payoutRoutes);
+app.use('/api/regions', regionRoutes);
 
 // Error handlers
 app.use(notFound);

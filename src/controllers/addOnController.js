@@ -36,11 +36,15 @@ const addAddOn = async (req, res) => {
   }
 };
 
-// Get all add-ons (customer will see these when booking)
+// Get all add-ons grouped by type (customer will see these when booking)
 const getAllAddOns = async (req, res) => {
   try {
-    const addOns = await AddOn.find();
-    return sendSuccess(res, 200, 'Add-ons retrieved successfully', addOns);
+    const addOns = await AddOn.find().sort({ createdAt: 1 });
+
+    const free = addOns.filter(a => a.type === 'free');
+    const paid = addOns.filter(a => a.type === 'paid');
+
+    return sendSuccess(res, 200, 'Add-ons retrieved successfully', { free, paid });
   } catch (error) {
     console.error('Get All AddOns Error:', error);
     return sendError(res, 500, error.message || 'Failed to retrieve add-ons');

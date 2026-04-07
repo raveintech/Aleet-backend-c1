@@ -42,14 +42,14 @@ const bookingSchema = new mongoose.Schema({
 
   dates: {
     startDate: { type: Date, required: true }, // pickup time
-    endDate:   { type: Date, required: true }  // dropoff arrival time
+    endDate: { type: Date, required: true }  // dropoff arrival time
   },
 
   vehicleType: { type: mongoose.Schema.Types.ObjectId, ref: 'VehicleType', required: true },
   quantity: { type: Number, min: 1, max: 5, default: 1 },
 
   pickupLocation: { type: String, required: true },
-  dropoffLocation:{ type: String, required: true },
+  dropoffLocation: { type: String, default: null }, // optional when freeRouting is true
 
   // New stop structure (arrivalTime + dwellMinutes)
   stops: [stopSchema],
