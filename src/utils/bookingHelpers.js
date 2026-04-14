@@ -72,7 +72,7 @@ function validateBookingInput({ region, startDate, endDate, quantity }) {
 
     if (bookingHours < 3) throw new Error('Minimum booking is 3 hours');
     if (bookingDays > 7) throw new Error('Maximum booking is 7 days');
-    if (quantity < 1 || quantity > 5) throw new Error('Quantity must be between 1 and 5');
+    //if (quantity < 1 || quantity > 5) throw new Error('Quantity must be between 1 and 5');
 
     return { bookingHours, bookingDays };
 }
