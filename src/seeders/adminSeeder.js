@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env.local') });
 
 // Test admin data
 const testAdmins = [
