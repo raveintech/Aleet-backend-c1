@@ -71,8 +71,11 @@ const userSchema = new mongoose.Schema(
       ssn: { type: String },
       licenseImage: { type: String, default: null },
       vehicleImage: { type: String, default: null },
+      forHireLicenseImage: { type: String, default: null },
       driverRating: { type: Number, default: 0 },
       active: { type: Boolean, default: true },
+      hasForHireLicense: { type: Boolean, default: false },
+      authorizeBackgroundCheck: { type: Boolean, default: false },
 
       // 🟩 S-Level Fields
       sLevel: {

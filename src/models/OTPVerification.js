@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const otpVerificationSchema = new mongoose.Schema({
   purpose: {
     type: String,
-    enum: ['signup', 'login'],
+    enum: ['signup', 'login', 'driver_signup'],
     default: 'signup',
     index: true
   },
@@ -38,7 +38,8 @@ const otpVerificationSchema = new mongoose.Schema({
   payload: {
     email: { type: String, default: null },
     name: { type: String, default: null },
-    role: { type: String, default: 'customer' }
+    role: { type: String, default: 'customer' },
+    hashedPassword: { type: String, default: null }
   },
   createdAt: {
     type: Date,

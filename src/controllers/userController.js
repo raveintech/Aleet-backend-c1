@@ -144,7 +144,7 @@ const checkUser = asyncHandler(async (req, res) => {
 
 const loginUser = asyncHandler(async (req, res) => {
   try {
-    const { identifier, email, phone, password } = req.body;
+    const { identifier, email, phone, password, expectedRole } = req.body;
 
     // Accept identifier, or legacy email/phone fields
     const raw = (identifier || email || phone || '').toString().trim();
@@ -169,6 +169,17 @@ const loginUser = asyncHandler(async (req, res) => {
 
     if (!user) {
       return sendUnauthorized(res, 'Invalid credentials');
+    }
+
+    // Role check:
+    // - expectedRole === 'driver' → allow 'driver' and 'admin' (shared login form)
+    // - expectedRole not provided  → allow 'customer' only
+    const allowedRoles = expectedRole === 'driver' ? ['driver', 'admin'] : ['customer'];
+    if (!allowedRoles.includes(user.role)) {
+      const message = expectedRole === 'driver'
+        ? 'This account is not registered as a driver'
+        : 'Invalid credentials';
+      return sendUnauthorized(res, message);
     }
 
     if (!user.password) {

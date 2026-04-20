@@ -218,7 +218,7 @@ const verifySignupOtp = async ({ identifier, code }) => {
 
   const otpRecord = await OTPVerification.findOne({
     ...lookupField,
-    purpose: 'signup',
+    purpose: { $in: ['signup', 'driver_signup'] },
     verified: false,
     expiresAt: { $gt: new Date() },
   }).sort({ createdAt: -1 });
@@ -240,6 +240,24 @@ const verifySignupOtp = async ({ identifier, code }) => {
 
   otpRecord.verified = true;
   await otpRecord.save();
+
+  const isDriverFlow = otpRecord.purpose === 'driver_signup';
+
+  if (isDriverFlow) {
+    // Driver flow — embed all data into a short-lived token for step 3
+    const driverToken = jwt.sign(
+      {
+        type: 'driver_signup_verified',
+        phone: lookupField.phone,
+        email: otpRecord.payload?.email || null,
+        name: otpRecord.payload?.name || null,
+        hashedPassword: otpRecord.payload?.hashedPassword || null,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '30m' }
+    );
+    return { driverToken, identifierType: 'phone' };
+  }
 
   const signupToken = jwt.sign(
     {
@@ -414,6 +432,163 @@ const resetPassword = async ({ token, password }) => {
   return { message: 'Password reset successful' };
 };
 
+const driverSignupStart = async ({ name, phone, email, password }) => {
+  if (!name || !phone || !email || !password) {
+    throw new AuthServiceError('name, phone, email and password are required', 400);
+  }
+  if (!isValidEmail(normalizeEmail(email))) {
+    throw new AuthServiceError('Invalid email address', 400);
+  }
+  if (String(password).length < 6) {
+    throw new AuthServiceError('Password must be at least 6 characters', 400);
+  }
+
+  const normalizedPhone = normalizePhone(phone);
+  if (!normalizedPhone) throw new AuthServiceError('Invalid phone number', 400);
+
+  const normalizedEmail = normalizeEmail(email);
+
+  const [phoneConflict, emailConflict] = await Promise.all([
+    User.findOne({ phone: normalizedPhone }).lean(),
+    User.findOne({ email: normalizedEmail }).lean(),
+  ]);
+  if (phoneConflict) throw new AuthServiceError('An account with this phone already exists', 409);
+  if (emailConflict) throw new AuthServiceError('An account with this email already exists', 409);
+
+  const otpCode = generateOTP();
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+  const bcrypt = require('bcryptjs');
+  const hashedPassword = await bcrypt.hash(String(password), 10);
+
+  await OTPVerification.deleteMany({ phone: normalizedPhone, purpose: 'driver_signup' });
+  await OTPVerification.create({
+    purpose: 'driver_signup',
+    phone: normalizedPhone,
+    code: otpCode,
+    expiresAt,
+    attempts: 0,
+    verified: false,
+    payload: { name: String(name).trim(), email: normalizedEmail, hashedPassword, role: 'driver' },
+  });
+
+  try {
+    await sendOTP(normalizedPhone, otpCode);
+  } catch (error) {
+    await OTPVerification.deleteMany({ phone: normalizedPhone, purpose: 'driver_signup' });
+    throw new AuthServiceError(error.message || 'Failed to send OTP', 502);
+  }
+
+  return { identifier: normalizedPhone, identifierType: 'phone', expiresIn: '5 minutes' };
+};
+
+const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, files }) => {
+  if (!driverToken) throw new AuthServiceError('driverToken is required', 400);
+  if (!ssn) throw new AuthServiceError('SSN is required', 400);
+
+  const parsedVehicleTypes = parseArrayInput(vehicleTypes).filter(Boolean);
+  if (!parsedVehicleTypes.length) {
+    throw new AuthServiceError('At least one vehicle type is required', 400);
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(driverToken, process.env.JWT_SECRET);
+  } catch {
+    throw new AuthServiceError('Invalid or expired token', 401);
+  }
+  if (decoded.type !== 'driver_signup_verified') {
+    throw new AuthServiceError('Invalid token type', 401);
+  }
+
+  const licenseImage = files?.licenseImage?.[0];
+  const vehicleImage = files?.vehicleImage?.[0];
+
+  if (!licenseImage) throw new AuthServiceError('License image is required', 400);
+  if (!vehicleImage) throw new AuthServiceError('Vehicle image is required', 400);
+
+  const docsToken = jwt.sign(
+    {
+      type: 'driver_signup_docs',
+      phone: decoded.phone,
+      email: decoded.email,
+      name: decoded.name,
+      hashedPassword: decoded.hashedPassword,
+      ssn,
+      vehicleTypes: parsedVehicleTypes,
+      licenseImage: `/uploads/${licenseImage.filename}`,
+      vehicleImage: `/uploads/${vehicleImage.filename}`,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: '30m' }
+  );
+
+  return { docsToken };
+};
+
+const driverSignupComplete = async ({ docsToken, hasForHireLicense, authorizeBackgroundCheck, files }) => {
+  if (!docsToken) throw new AuthServiceError('docsToken is required', 400);
+
+  let decoded;
+  try {
+    decoded = jwt.verify(docsToken, process.env.JWT_SECRET);
+  } catch {
+    throw new AuthServiceError('Invalid or expired token', 401);
+  }
+  if (decoded.type !== 'driver_signup_docs') {
+    throw new AuthServiceError('Invalid token type', 401);
+  }
+
+  // Final duplicate check
+  const [phoneConflict, emailConflict] = await Promise.all([
+    User.findOne({ phone: decoded.phone }).lean(),
+    User.findOne({ email: decoded.email }).lean(),
+  ]);
+  if (phoneConflict) throw new AuthServiceError('An account with this phone already exists', 409);
+  if (emailConflict) throw new AuthServiceError('An account with this email already exists', 409);
+
+  const mongoose = require('mongoose');
+  const vehicleTypeIds = decoded.vehicleTypes.map((v) => new mongoose.Types.ObjectId(v));
+
+  const forHireLicenseImage = files?.forHireLicenseImage?.[0]
+    ? `/uploads/${files.forHireLicenseImage[0].filename}`
+    : null;
+
+  const user = new User({
+    name: decoded.name,
+    email: decoded.email,
+    phone: decoded.phone,
+    password: null,
+    role: 'driver',
+    isPhoneVerified: true,
+    driver: {
+      ssn: decoded.ssn,
+      vehicleTypes: vehicleTypeIds,
+      licenseImage: decoded.licenseImage,
+      vehicleImage: decoded.vehicleImage,
+      hasForHireLicense: !!hasForHireLicense,
+      forHireLicenseImage: forHireLicenseImage,
+      authorizeBackgroundCheck: true,
+    },
+  });
+
+  // Bypass pre-save password validation (password will be set via $set)
+  await User.findByIdAndUpdate(
+    (await user.save())._id,
+    { $set: { password: decoded.hashedPassword } }
+  );
+
+  const savedUser = await User.findById(user._id);
+
+  // Trigger Checkr background check async (non-blocking)
+  autoInviteDriverToCheckr(savedUser._id).catch((err) =>
+    console.error('Checkr auto-invite failed:', err?.response?.data || err.message)
+  );
+
+  const UserService = require('./userService');
+  return UserService.formatUser(savedUser);
+};
+
 module.exports = {
   registerUser,
   AuthServiceError,
@@ -423,4 +598,7 @@ module.exports = {
   completeSignup,
   forgotPassword,
   resetPassword,
+  driverSignupStart,
+  driverSignupDocuments,
+  driverSignupComplete,
 };
