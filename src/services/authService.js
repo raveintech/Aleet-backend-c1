@@ -505,7 +505,6 @@ const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, files }) 
   const vehicleImage = files?.vehicleImage?.[0];
 
   if (!licenseImage) throw new AuthServiceError('License image is required', 400);
-  if (!vehicleImage) throw new AuthServiceError('Vehicle image is required', 400);
 
   const docsToken = jwt.sign(
     {
@@ -517,7 +516,7 @@ const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, files }) 
       ssn,
       vehicleTypes: parsedVehicleTypes,
       licenseImage: `/uploads/${licenseImage.filename}`,
-      vehicleImage: `/uploads/${vehicleImage.filename}`,
+      ...(vehicleImage && { vehicleImage: `/uploads/${vehicleImage.filename}` }),
     },
     process.env.JWT_SECRET,
     { expiresIn: '30m' }

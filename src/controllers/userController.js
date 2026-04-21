@@ -176,9 +176,11 @@ const loginUser = asyncHandler(async (req, res) => {
     // - expectedRole not provided  → allow 'customer' only
     const allowedRoles = expectedRole === 'driver' ? ['driver', 'admin'] : ['customer'];
     if (!allowedRoles.includes(user.role)) {
-      const message = expectedRole === 'driver'
-        ? 'This account is not registered as a driver'
-        : 'Invalid credentials';
+      const message = user.role === 'driver'
+        ? 'This account is registered as a driver. Please use the driver app to sign in.'
+        : expectedRole === 'driver'
+          ? 'This account is not registered as a driver'
+          : 'Invalid credentials';
       return sendUnauthorized(res, message);
     }
 
