@@ -43,6 +43,7 @@ const upload = multer({
 const uploadDriverDocuments = upload.fields([
   { name: 'licenseImage', maxCount: 1 },
   { name: 'vehicleImage', maxCount: 1 },
+  { name: 'forHireLicenseImage', maxCount: 1 },
 ]);
 
 // Define multer fields for driver signup complete (step 4)

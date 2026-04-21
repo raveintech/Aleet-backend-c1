@@ -4,7 +4,7 @@ const User = require('../models/User');
 // Middleware to authenticate JWT token
 const authenticateJWT = async (req, res, next) => {
   const token = req.header('Authorization') && req.header('Authorization').split(' ')[1];  // Extract token from 'Authorization' header
-  
+
   if (!token) {
     return res.status(401).json({ msg: 'No token provided, authorization denied' });
   }
@@ -24,4 +24,34 @@ const authenticateJWT = async (req, res, next) => {
   }
 };
 
+// Middleware to block drivers with status !== 'active'
+const requireActiveDriver = async (req, res, next) => {
+  if (!req.user?.id) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+
+  try {
+    const user = await User.findById(req.user.id).select('role driver.status').lean();
+
+    if (!user || user.role !== 'driver') {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    if (user.driver?.status !== 'active') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is pending review. You will be notified once approved.',
+        status: user.driver?.status || 'pending_review',
+      });
+    }
+
+    next();
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
 module.exports = authenticateJWT;
+module.exports.authenticateJWT = authenticateJWT;
+module.exports.requireActiveDriver = requireActiveDriver;

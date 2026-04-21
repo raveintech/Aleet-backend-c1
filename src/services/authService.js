@@ -482,13 +482,24 @@ const driverSignupStart = async ({ name, phone, email, password }) => {
   return { identifier: normalizedPhone, identifierType: 'phone', expiresIn: '5 minutes' };
 };
 
-const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, files }) => {
+const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, hasOwnVehicle, hasForHireLicense, files }) => {
   if (!driverToken) throw new AuthServiceError('driverToken is required', 400);
-  if (!ssn) throw new AuthServiceError('SSN is required', 400);
 
-  const parsedVehicleTypes = parseArrayInput(vehicleTypes).filter(Boolean);
-  if (!parsedVehicleTypes.length) {
-    throw new AuthServiceError('At least one vehicle type is required', 400);
+  const ownVehicle = hasOwnVehicle === true || hasOwnVehicle === 'true';
+  const forHireLicense = hasForHireLicense === true || hasForHireLicense === 'true';
+
+  // SSN required only if no for-hire license
+  if (!forHireLicense && !ssn) {
+    throw new AuthServiceError('SSN is required when you do not have a for-hire license', 400);
+  }
+
+  // vehicleTypes required only if driver has own vehicle
+  let parsedVehicleTypes = [];
+  if (ownVehicle) {
+    parsedVehicleTypes = parseArrayInput(vehicleTypes).filter(Boolean);
+    if (!parsedVehicleTypes.length) {
+      throw new AuthServiceError('At least one vehicle type is required when you have your own vehicle', 400);
+    }
   }
 
   let decoded;
@@ -503,8 +514,19 @@ const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, files }) 
 
   const licenseImage = files?.licenseImage?.[0];
   const vehicleImage = files?.vehicleImage?.[0];
+  const forHireLicenseImage = files?.forHireLicenseImage?.[0];
 
   if (!licenseImage) throw new AuthServiceError('License image is required', 400);
+
+  // vehicleImage required only if has own vehicle
+  if (ownVehicle && !vehicleImage) {
+    throw new AuthServiceError('Vehicle image is required when you have your own vehicle', 400);
+  }
+
+  // forHireLicenseImage required only if has for-hire license
+  if (forHireLicense && !forHireLicenseImage) {
+    throw new AuthServiceError('For-hire license image is required when you have a for-hire license', 400);
+  }
 
   const docsToken = jwt.sign(
     {
@@ -513,10 +535,13 @@ const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, files }) 
       email: decoded.email,
       name: decoded.name,
       hashedPassword: decoded.hashedPassword,
-      ssn,
+      ssn: forHireLicense ? null : ssn,
       vehicleTypes: parsedVehicleTypes,
+      hasOwnVehicle: ownVehicle,
+      hasForHireLicense: forHireLicense,
       licenseImage: `/uploads/${licenseImage.filename}`,
       ...(vehicleImage && { vehicleImage: `/uploads/${vehicleImage.filename}` }),
+      ...(forHireLicenseImage && { forHireLicenseImage: `/uploads/${forHireLicenseImage.filename}` }),
     },
     process.env.JWT_SECRET,
     { expiresIn: '30m' }
@@ -525,7 +550,7 @@ const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, files }) 
   return { docsToken };
 };
 
-const driverSignupComplete = async ({ docsToken, hasForHireLicense, authorizeBackgroundCheck, files }) => {
+const driverSignupComplete = async ({ docsToken, authorizeBackgroundCheck, files }) => {
   if (!docsToken) throw new AuthServiceError('docsToken is required', 400);
 
   let decoded;
@@ -547,11 +572,7 @@ const driverSignupComplete = async ({ docsToken, hasForHireLicense, authorizeBac
   if (emailConflict) throw new AuthServiceError('An account with this email already exists', 409);
 
   const mongoose = require('mongoose');
-  const vehicleTypeIds = decoded.vehicleTypes.map((v) => new mongoose.Types.ObjectId(v));
-
-  const forHireLicenseImage = files?.forHireLicenseImage?.[0]
-    ? `/uploads/${files.forHireLicenseImage[0].filename}`
-    : null;
+  const vehicleTypeIds = (decoded.vehicleTypes || []).map((v) => new mongoose.Types.ObjectId(v));
 
   const user = new User({
     name: decoded.name,
@@ -561,13 +582,15 @@ const driverSignupComplete = async ({ docsToken, hasForHireLicense, authorizeBac
     role: 'driver',
     isPhoneVerified: true,
     driver: {
-      ssn: decoded.ssn,
+      ssn: decoded.ssn || null,
       vehicleTypes: vehicleTypeIds,
       licenseImage: decoded.licenseImage,
-      vehicleImage: decoded.vehicleImage,
-      hasForHireLicense: !!hasForHireLicense,
-      forHireLicenseImage: forHireLicenseImage,
+      vehicleImage: decoded.vehicleImage || null,
+      hasForHireLicense: !!decoded.hasForHireLicense,
+      hasOwnVehicle: !!decoded.hasOwnVehicle,
+      forHireLicenseImage: decoded.forHireLicenseImage || null,
       authorizeBackgroundCheck: true,
+      status: 'pending_review',
     },
   });
 

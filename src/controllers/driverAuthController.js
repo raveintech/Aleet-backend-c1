@@ -21,11 +21,13 @@ const driverSignupStart = asyncHandler(async (req, res) => {
 
 const driverSignupDocuments = asyncHandler(async (req, res) => {
     try {
-        const { driverToken, ssn, vehicleTypes } = req.body;
+        const { driverToken, ssn, vehicleTypes, hasOwnVehicle, hasForHireLicense } = req.body;
         const data = await AuthService.driverSignupDocuments({
             driverToken,
             ssn,
             vehicleTypes,
+            hasOwnVehicle,
+            hasForHireLicense,
             files: req.files,
         });
         return sendSuccess(res, 200, 'Documents uploaded successfully', data);
@@ -48,7 +50,6 @@ const driverSignupComplete = asyncHandler(async (req, res) => {
 
         const user = await AuthService.driverSignupComplete({
             docsToken,
-            hasForHireLicense: hasForHireLicense === true || hasForHireLicense === 'true',
             authorizeBackgroundCheck: authorizeBackgroundCheck === true || authorizeBackgroundCheck === 'true',
             files: req.files,
         });

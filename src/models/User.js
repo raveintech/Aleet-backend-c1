@@ -75,7 +75,13 @@ const userSchema = new mongoose.Schema(
       driverRating: { type: Number, default: 0 },
       active: { type: Boolean, default: true },
       hasForHireLicense: { type: Boolean, default: false },
+      hasOwnVehicle: { type: Boolean, default: false },
       authorizeBackgroundCheck: { type: Boolean, default: false },
+      status: {
+        type: String,
+        enum: ['pending_review', 'active', 'suspended'],
+        default: 'pending_review',
+      },
 
       // 🟩 S-Level Fields
       sLevel: {
@@ -140,11 +146,6 @@ userSchema.pre("save", async function (next) {
 
 // Custom validation for driver fields
 userSchema.pre("save", function (next) {
-  if (this.role === "driver") {
-    if (!this.driver.ssn) {
-      return next(new Error("SSN is required for drivers"));
-    }
-  }
   next();
 });
 

@@ -56,6 +56,11 @@ const sendOTP = async (phoneNumber, otpCode) => {
       formattedPhone = `+${formattedPhone}`;
     }
 
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DEV] SMS skipped. OTP for ${formattedPhone}: ${otpCode}`);
+      return { sid: 'dev-mock', status: 'skipped' };
+    }
+
     const messagePayload = {
       body: `Your Aleet verification code is: ${otpCode}. This code will expire in 5 minutes.`,
       to: formattedPhone,
