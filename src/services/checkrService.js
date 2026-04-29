@@ -132,8 +132,11 @@ function mapWebhookToState(event) {
   if (t === 'report.canceled') updates.status = 'canceled';
   if (t === 'report.disputed') updates.status = 'dispute';
 
-  // capture report id if present
+  // capture report id:
+  // — from report events (body.id where object=report)
+  // — from invitation.completed (body.report_id)
   if (body.id && body.object === 'report') updates.reportId = body.id;
+  if (body.report_id) updates.reportId = body.report_id;
 
   return updates;
 }

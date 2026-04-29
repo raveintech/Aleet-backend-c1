@@ -354,6 +354,34 @@ const updateDriverContactInfo = asyncHandler(async (req, res) => {
   }
 });
 
+const deleteAccount = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const user = await User.findById(userId);
+    if (!user) return sendNotFound(res, 'User not found');
+
+    // Drivers with active bookings should not be silently deleted
+    if (user.role === 'driver' && user.driver?.status === 'approved') {
+      const Booking = require('../models/Booking');
+      const activeBooking = await Booking.findOne({
+        assignedDriver: userId,
+        status: { $in: ['Pending', 'Confirmed', 'In Progress'] },
+      });
+      if (activeBooking) {
+        return sendError(res, 409, 'Cannot delete account while you have active bookings');
+      }
+    }
+
+    await User.findByIdAndDelete(userId);
+
+    return sendSuccess(res, 200, 'Account deleted successfully');
+  } catch (error) {
+    console.error('Delete Account Error:', error);
+    return sendError(res, 500, error.message || 'Failed to delete account');
+  }
+});
+
 module.exports = {
   signupStart,
   signupVerify,
@@ -367,4 +395,5 @@ module.exports = {
   getProfile,
   submitRevision,
   checkUser,
+  deleteAccount,
 };
