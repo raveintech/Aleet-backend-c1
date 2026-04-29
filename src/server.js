@@ -32,8 +32,9 @@ const PaymentsController = require('./controllers/payments.controller');
 
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 
-// Stripe webhook route must come before express.json()
+// Raw-body routes MUST come before express.json() so the body stream is not consumed
 app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), PaymentsController.webhook);
+app.post('/checkr/webhooks/checkr', express.raw({ type: '*/*' }), require('./controllers/checkrController').webhook);
 
 // Middlewares
 app.use(express.json());

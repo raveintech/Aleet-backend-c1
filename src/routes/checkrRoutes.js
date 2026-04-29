@@ -10,7 +10,7 @@ router.get('/packages', authenticateJWT, listPackages);
 // manually send invite (if not auto)
 router.post('/drivers/:id/invite', authenticateJWT, inviteDriver);
 
-// webhook receiver (NO protect here)
-router.post('/webhooks/checkr', express.json({ type: '*/*' }), webhook);
+// webhook receiver (NO auth, raw body needed for signature verification)
+router.post('/webhooks/checkr', express.raw({ type: '*/*' }), webhook);
 
 module.exports = router;

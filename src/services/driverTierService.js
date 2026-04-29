@@ -1,18 +1,20 @@
 // src/services/driverTierService.js
 require('dotenv').config();
 const mongoose = require('mongoose');
-const connectDB = require('../config/db');   // ✅ Reuse DB connection config
+const connectDB = require('../config/db');
 const User = require('../models/User');
 
-// ✅ Connect to MongoDB before running the service
-connectDB();
+// Only connect when running as a standalone script
+if (require.main === module) {
+  connectDB();
+}
 
 const upgradeDriverTiers = async () => {
   console.log('🚀 Running Driver Tier Upgrade Service...');
 
   try {
     // ✅ Find all active drivers
-    const drivers = await User.find({ role: 'driver', 'driver.active': true });
+    const drivers = await User.find({ role: 'driver', 'driver.status': 'approved' });
 
     console.log(`🧾 Found ${drivers.length} active drivers.`);
 
@@ -59,6 +61,22 @@ const upgradeDriverTiers = async () => {
 };
 
 // ✅ Run the service if this file is executed directly
-(async () => {
-  await upgradeDriverTiers();
-})();
+if (require.main === module) {
+  (async () => {
+    await upgradeDriverTiers();
+  })();
+}
+
+/**
+ * Determine driver tier from onboarding fields:
+ * S-Level = no own vehicle
+ * Pro     = has own vehicle
+ * Diamond = has own vehicle + has for-hire license
+ */
+const resolveDriverTier = ({ hasOwnVehicle, hasForHireLicense }) => {
+  if (hasOwnVehicle && hasForHireLicense) return 'Diamond';
+  if (hasOwnVehicle) return 'Pro';
+  return 'S-Level';
+};
+
+module.exports = { upgradeDriverTiers, resolveDriverTier };

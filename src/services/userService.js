@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+const { fileUrl } = require('../utils/multer');
 const User = require("../models/User");
 
 const normalizePhone = (raw) => {
@@ -62,10 +62,11 @@ const register = async (body, files) => {
   const normalizedPhone = normalizePhone(phone);
   if (!normalizedPhone) throw new Error("Invalid phone number");
 
-  const existing = await User.findOne({ phone: normalizedPhone });
+  const resolvedRole = role || 'customer';
+  const existing = await User.findOne({ phone: normalizedPhone, role: resolvedRole });
   if (existing) throw new Error("User with this phone number already exists");
   if (email) {
-    const existingByEmail = await User.findOne({ email: String(email).trim().toLowerCase() });
+    const existingByEmail = await User.findOne({ email: String(email).trim().toLowerCase(), role: resolvedRole });
     if (existingByEmail) throw new Error("User with this email already exists");
   }
 
@@ -87,12 +88,11 @@ const register = async (body, files) => {
     user.driver = {
       ssn,
       vehicleTypes: vt,
-      licenseImage: licenseImage ? `/uploads/${licenseImage.filename}` : null,
-      vehicleImage: vehicleImage ? `/uploads/${vehicleImage.filename}` : null,
+      licenseImage: licenseImage ? fileUrl(licenseImage.filename) : null,
+      vehicleImage: vehicleImage ? fileUrl(vehicleImage.filename) : null,
       tier: "S-Level",
       backgroundCheck: false,
       driverRating: 0,
-      active: true,
       sLevel: {
         rentalUsed: false,
         rentalCost: 0,
@@ -122,16 +122,20 @@ const register = async (body, files) => {
   return formatUser(user);
 };
 
-// Find by email
-const findByEmail = async (email) => {
-  return await User.findOne({ email });
+// Find by email, optionally scoped to a role
+const findByEmail = async (email, role) => {
+  const query = { email: String(email || '').trim().toLowerCase() };
+  if (role) query.role = role;
+  return await User.findOne(query);
 };
 
-// Find by phone number — always normalizes before querying
-const findByPhone = async (phone) => {
+// Find by phone number — always normalizes before querying, optionally scoped to a role
+const findByPhone = async (phone, role) => {
   const normalized = normalizePhone(phone);
   if (!normalized) return null;
-  return await User.findOne({ phone: normalized });
+  const query = { phone: normalized };
+  if (role) query.role = role;
+  return await User.findOne(query);
 };
 
 // Update phone verification status — normalizes phone before update
@@ -144,18 +148,73 @@ const updatePhoneVerification = async (phone, isVerified = true) => {
   );
 };
 
-// Format user response
-// Format user response
-const formatUser = (user) => {
-  if (!user) return null; // agar user hi na ho to null return kare
+// Mask SSN: show only last 4 digits
+const maskSSN = (ssn) => {
+  if (!ssn) return null;
+  const digits = String(ssn).replace(/\D/g, '');
+  return `***-**-${digits.slice(-4)}`;
+};
 
-  return {
+// Format user response — role-aware, no cross-role data leakage
+const formatUser = (user) => {
+  if (!user) return null;
+
+  const base = {
     _id: user._id,
     name: user.name,
     email: user.email,
     phone: user.phone,
     role: user.role,
-    driver: user.driver,
+    isPhoneVerified: user.isPhoneVerified,
+    active: user.active,
+    createdAt: user.createdAt,
+  };
+
+  if (user.role === 'driver') {
+    const d = user.driver || {};
+    return {
+      ...base,
+      driver: {
+        tier: d.tier,
+        status: d.status,
+        backgroundCheck: d.backgroundCheck,
+        revisionNotes: d.status === 'needs_revision' ? (d.revisionNotes || null) : undefined,
+        vehicleTypes: d.vehicleTypes,
+        licenseImage: d.licenseImage,
+        vehicleImage: d.vehicleImage,
+        forHireLicenseImage: d.forHireLicenseImage,
+        hasForHireLicense: d.hasForHireLicense,
+        hasOwnVehicle: d.hasOwnVehicle,
+        driverRating: d.driverRating,
+        ssn: maskSSN(d.ssn),
+        sLevel: d.sLevel,
+        pro: d.pro,
+        diamond: d.diamond,
+        checkr: d.checkr
+          ? {
+            status: d.checkr.status,
+            lastEvent: d.checkr.lastEvent,
+            lastEventAt: d.checkr.lastEventAt,
+            dashboardUrl: d.checkr.dashboardUrl,
+          }
+          : undefined,
+      },
+    };
+  }
+
+  if (user.role === 'admin') {
+    return {
+      ...base,
+      admin: user.admin,
+    };
+  }
+
+  // customer
+  return {
+    ...base,
+    preferences: user.preferences,
+    subscriptionStatus: user.subscriptionStatus,
+    subscriptionDetails: user.subscriptionDetails,
   };
 };
 

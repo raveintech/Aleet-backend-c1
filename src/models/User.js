@@ -5,8 +5,8 @@ const bcrypt = require("bcryptjs");
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: false }, // Made optional for phone-only registration
-    email: { type: String, required: false, unique: true, sparse: true }, // Made optional with sparse index
-    phone: { type: String, required: true, unique: true },
+    email: { type: String, required: false, sparse: true },
+    phone: { type: String, required: true },
     password: { type: String, required: false }, // Made optional for phone-only auth
     isPhoneVerified: { type: Boolean, default: false }, // Track phone verification status
     resetPasswordToken: { type: String, default: null },
@@ -73,15 +73,24 @@ const userSchema = new mongoose.Schema(
       vehicleImage: { type: String, default: null },
       forHireLicenseImage: { type: String, default: null },
       driverRating: { type: Number, default: 0 },
-      active: { type: Boolean, default: true },
       hasForHireLicense: { type: Boolean, default: false },
       hasOwnVehicle: { type: Boolean, default: false },
       authorizeBackgroundCheck: { type: Boolean, default: false },
       status: {
         type: String,
-        enum: ['pending_review', 'active', 'suspended'],
-        default: 'pending_review',
+        enum: [
+          'draft',               // default — signup not yet completed
+          'submitted',           // signup complete, awaiting admin action
+          'background_pending',  // Checkr invitation sent, check in progress
+          'background_completed',// Checkr report done, awaiting admin review
+          'approved',            // admin approved, can accept bookings
+          'rejected',            // admin rejected
+          'needs_revision',      // admin requested document corrections
+          'revision_complete',   // driver submitted corrections, awaiting re-review
+        ],
+        default: 'draft',
       },
+      revisionNotes: { type: String, default: null }, // Admin notes sent with needs_revision status
 
       // 🟩 S-Level Fields
       sLevel: {
@@ -136,6 +145,10 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Compound unique indexes: same email/phone allowed for different roles
+userSchema.index({ email: 1, role: 1 }, { unique: true, sparse: true });
+userSchema.index({ phone: 1, role: 1 }, { unique: true });
 
 // Hash password before saving (only if password exists)
 userSchema.pre("save", async function (next) {

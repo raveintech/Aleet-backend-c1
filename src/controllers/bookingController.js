@@ -335,7 +335,7 @@ const acceptBooking = asyncHandler(async (req, res) => {
 
     const driver = await User.findById(driverId);
     if (!driver || driver.role !== 'driver') return sendValidationError(res, 'Invalid driver');
-    if (!driver.active || !driver.driver?.active) return sendForbidden(res, 'Only active drivers can accept trips');
+    if (driver.driver?.status !== 'approved') return sendForbidden(res, 'Only active drivers can accept trips');
 
     const driverVehicles = driver.driver?.vehicleTypes?.map(v => v.toString()) || [];
     if (!driverVehicles.includes(booking.vehicleType.toString())) {

@@ -54,6 +54,9 @@ const uploadDriverComplete = upload.fields([
 // No-file upload — parses multipart/form-data body fields only (no files expected)
 const uploadNone = upload.none();
 
+// Single for-hire license image upload (used by admin to attach Aleet-generated license)
+const uploadSingleForHireLicense = upload.single('forHireLicenseImage');
+
 // Error handling middleware
 const handleUploadError = (error, req, res, next) => {
   if (error instanceof multer.MulterError) {
@@ -73,4 +76,18 @@ const handleUploadError = (error, req, res, next) => {
   next(error);
 };
 
-module.exports = { uploadDriverDocuments, uploadDriverComplete, handleUploadError, uploadNone };
+module.exports = { uploadDriverDocuments, uploadDriverComplete, uploadSingleForHireLicense, handleUploadError, uploadNone };
+
+/**
+ * Build a fully-qualified URL for an uploaded file.
+ * Falls back to a relative path when APP_URL is not set.
+ *
+ * @param {string} filename - multer file.filename
+ * @returns {string}
+ */
+const fileUrl = (filename) => {
+  const base = (process.env.APP_URL || '').replace(/\/$/, '');
+  return base ? `${base}/uploads/${filename}` : `/uploads/${filename}`;
+};
+
+module.exports = { uploadDriverDocuments, uploadDriverComplete, uploadSingleForHireLicense, handleUploadError, uploadNone, fileUrl };

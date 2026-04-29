@@ -12,10 +12,8 @@ const authenticateJWT = async (req, res, next) => {
   try {
     // Verify the token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    console.log(decoded.id)
     // Attach user info (userId and role) to the request object
-    req.user = { id: decoded.id };
-
+    req.user = { id: decoded.id, role: decoded.role };
 
     next();  // Proceed to the next middleware or route handler
   } catch (err) {
@@ -37,11 +35,11 @@ const requireActiveDriver = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    if (user.driver?.status !== 'active') {
+    if (user.driver?.status !== 'approved') {
       return res.status(403).json({
         success: false,
-        message: 'Your account is pending review. You will be notified once approved.',
-        status: user.driver?.status || 'pending_review',
+        message: 'Your account is not yet approved. You will be notified once approved.',
+        status: user.driver?.status || 'draft',
       });
     }
 

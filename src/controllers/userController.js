@@ -3,10 +3,12 @@
 const asyncHandler = require('express-async-handler');
 const bcrypt = require('bcryptjs');
 const UserService = require('../services/userService');
+const { resolveDriverTier } = require('../services/driverTierService');
 const { normalizePhone } = require('../services/userService');
 const AuthService = require('../services/authService');
 const generateToken = require('../utils/generateToken');
 const User = require('../models/User');
+const { fileUrl } = require('../utils/multer');
 const {
   sendSuccess,
   sendError,
@@ -85,8 +87,8 @@ const signupComplete = asyncHandler(async (req, res) => {
 
 const forgotPassword = asyncHandler(async (req, res) => {
   try {
-    const { email, resetBaseUrl } = req.body;
-    const data = await AuthService.forgotPassword({ email, resetBaseUrl });
+    const { email, role, resetBaseUrl } = req.body;
+    const data = await AuthService.forgotPassword({ email, role, resetBaseUrl });
     return sendSuccess(res, 200, data.message);
   } catch (error) {
     console.error('Forgot Password Error:', error);
@@ -119,16 +121,18 @@ const checkUser = asyncHandler(async (req, res) => {
     }
 
     const isEmail = raw.includes('@');
+    const { role } = req.body;
+    const lookupRole = role || undefined;
 
     let user;
     if (isEmail) {
-      user = await UserService.findByEmail(raw.toLowerCase());
+      user = await UserService.findByEmail(raw.toLowerCase(), lookupRole);
     } else {
       const normalizedPhone = normalizePhone(raw);
       if (!normalizedPhone) {
         return sendValidationError(res, 'Invalid phone number format');
       }
-      user = await UserService.findByPhone(normalizedPhone);
+      user = await UserService.findByPhone(normalizedPhone, lookupRole);
     }
 
     return sendSuccess(res, 200, 'Check complete', {
@@ -155,25 +159,31 @@ const loginUser = asyncHandler(async (req, res) => {
 
     // Detect type: if it contains @ → email, otherwise treat as phone
     const isEmail = raw.includes('@');
+    const lookupRole = expectedRole === 'driver' ? 'driver' : 'customer';
 
     let user;
     if (isEmail) {
-      user = await UserService.findByEmail(raw.toLowerCase());
+      user = await UserService.findByEmail(raw.toLowerCase(), lookupRole);
+      // driver login page is shared with admin — fallback to admin lookup
+      if (!user && expectedRole === 'driver') {
+        user = await UserService.findByEmail(raw.toLowerCase(), 'admin');
+      }
     } else {
       const normalizedPhone = normalizePhone(raw);
       if (!normalizedPhone) {
         return sendValidationError(res, 'Invalid phone number format');
       }
-      user = await UserService.findByPhone(normalizedPhone);
+      user = await UserService.findByPhone(normalizedPhone, lookupRole);
+      if (!user && expectedRole === 'driver') {
+        user = await UserService.findByPhone(normalizedPhone, 'admin');
+      }
     }
 
     if (!user) {
       return sendUnauthorized(res, 'Invalid credentials');
     }
 
-    // Role check:
-    // - expectedRole === 'driver' → allow 'driver' and 'admin' (shared login form)
-    // - expectedRole not provided  → allow 'customer' only
+    // allowedRoles kept for safety, but lookup is already role-scoped
     const allowedRoles = expectedRole === 'driver' ? ['driver', 'admin'] : ['customer'];
     if (!allowedRoles.includes(user.role)) {
       const message = user.role === 'driver'
@@ -207,12 +217,28 @@ const loginUser = asyncHandler(async (req, res) => {
 const updateDriverProfile = asyncHandler(async (req, res) => {
   try {
     const userId = req.user.id;
-    const { ssn, vehicleTypes } = req.body;
+
+    const driver = await User.findById(userId);
+    if (!driver || driver.role !== 'driver') return sendNotFound(res, 'Driver not found');
+
+    // Only allow updates in these statuses
+    const editableStatuses = ['submitted', 'background_pending', 'background_completed', 'approved', 'needs_revision'];
+    if (!editableStatuses.includes(driver.driver?.status)) {
+      return sendError(res, 403, 'Profile editing is not available at your current onboarding stage');
+    }
+
+    const { ssn, vehicleTypes, hasForHireLicense, hasOwnVehicle } = req.body;
     const licenseImage = req.files?.licenseImage?.[0];
     const vehicleImage = req.files?.vehicleImage?.[0];
+    const forHireLicenseImage = req.files?.forHireLicenseImage?.[0];
     const updateData = {};
 
-    if (ssn) updateData['driver.ssn'] = ssn;
+    if (ssn) {
+      if (!/^\d{3}-\d{2}-\d{4}$/.test(ssn)) {
+        return sendValidationError(res, 'SSN must be in the format XXX-XX-XXXX');
+      }
+      updateData['driver.ssn'] = ssn;
+    }
 
     if (vehicleTypes) {
       const mongoose = require('mongoose');
@@ -221,13 +247,31 @@ const updateDriverProfile = asyncHandler(async (req, res) => {
         : [new mongoose.Types.ObjectId(vehicleTypes)];
     }
 
-    if (licenseImage) {
-      updateData['driver.licenseImage'] = `/uploads/${licenseImage.filename}`;
+    if (hasForHireLicense !== undefined) {
+      const parsedHasForHireLicense = hasForHireLicense === true || hasForHireLicense === 'true';
+      updateData['driver.hasForHireLicense'] = parsedHasForHireLicense;
+      // Clear license image when driver no longer has a For-Hire license
+      if (!parsedHasForHireLicense) {
+        updateData['driver.forHireLicenseImage'] = null;
+      }
     }
 
-    if (vehicleImage) {
-      updateData['driver.vehicleImage'] = `/uploads/${vehicleImage.filename}`;
+    if (hasOwnVehicle !== undefined) {
+      updateData['driver.hasOwnVehicle'] = hasOwnVehicle === true || hasOwnVehicle === 'true';
     }
+
+    if (licenseImage) updateData['driver.licenseImage'] = fileUrl(licenseImage.filename);
+    if (vehicleImage) updateData['driver.vehicleImage'] = fileUrl(vehicleImage.filename);
+    if (forHireLicenseImage) updateData['driver.forHireLicenseImage'] = fileUrl(forHireLicenseImage.filename);
+
+    // Recalculate tier based on effective vehicle/license values
+    const effectiveHasOwnVehicle = 'driver.hasOwnVehicle' in updateData
+      ? updateData['driver.hasOwnVehicle']
+      : driver.driver?.hasOwnVehicle;
+    const effectiveHasForHireLicense = 'driver.hasForHireLicense' in updateData
+      ? updateData['driver.hasForHireLicense']
+      : driver.driver?.hasForHireLicense;
+    updateData['driver.tier'] = resolveDriverTier({ hasOwnVehicle: effectiveHasOwnVehicle, hasForHireLicense: effectiveHasForHireLicense });
 
     const user = await User.findByIdAndUpdate(
       userId,
@@ -237,7 +281,7 @@ const updateDriverProfile = asyncHandler(async (req, res) => {
 
     if (!user) return sendNotFound(res, 'User not found');
 
-    return sendSuccess(res, 200, 'Driver profile updated successfully', user);
+    return sendSuccess(res, 200, 'Driver profile updated successfully', UserService.formatUser(user));
   } catch (error) {
     console.error('Update Profile Error:', error);
     return sendError(res, 500, error.message || 'Profile update failed');
@@ -247,12 +291,66 @@ const updateDriverProfile = asyncHandler(async (req, res) => {
 // Get profile (unchanged)
 const getProfile = asyncHandler(async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    const user = await User.findById(req.user.id);
     if (!user) return sendNotFound(res, 'User not found');
-    return sendSuccess(res, 200, 'Profile retrieved successfully', user);
+    return sendSuccess(res, 200, 'Profile retrieved successfully', UserService.formatUser(user));
   } catch (error) {
     console.error('Get Profile Error:', error);
     return sendError(res, 500, error.message || 'Failed to retrieve profile');
+  }
+});
+
+const submitRevision = asyncHandler(async (req, res) => {
+  try {
+    const driver = await User.findById(req.user.id);
+    if (!driver || driver.role !== 'driver') return sendNotFound(res, 'Driver not found');
+
+    if (driver.driver?.status !== 'needs_revision') {
+      return sendError(res, 403, 'Only drivers with needs_revision status can submit a revision');
+    }
+
+    driver.driver.status = 'revision_complete';
+    driver.driver.revisionNotes = null;
+    await driver.save();
+
+    return sendSuccess(res, 200, 'Revision submitted successfully', UserService.formatUser(driver));
+  } catch (error) {
+    console.error('Submit Revision Error:', error);
+    return sendError(res, 500, error.message || 'Failed to submit revision');
+  }
+});
+
+const updateDriverContactInfo = asyncHandler(async (req, res) => {
+  try {
+    const driver = await User.findById(req.user.id);
+    if (!driver || driver.role !== 'driver') return sendNotFound(res, 'Driver not found');
+
+    const { name, email, phone } = req.body;
+    if (!name && !email && !phone) {
+      return sendValidationError(res, 'Provide at least one field to update: name, email, or phone');
+    }
+
+    if (email && email !== driver.email) {
+      const existing = await User.findOne({ email, role: 'driver', _id: { $ne: driver._id } });
+      if (existing) return sendError(res, 409, 'Email is already in use by another driver');
+      driver.email = email;
+    }
+
+    if (phone && phone !== driver.phone) {
+      const normalizedPhone = normalizePhone(phone);
+      const existing = await User.findOne({ phone: normalizedPhone, role: 'driver', _id: { $ne: driver._id } });
+      if (existing) return sendError(res, 409, 'Phone number is already in use by another driver');
+      driver.phone = normalizedPhone;
+    }
+
+    if (name) driver.name = name;
+
+    await driver.save();
+
+    return sendSuccess(res, 200, 'Contact info updated successfully', UserService.formatUser(driver));
+  } catch (error) {
+    console.error('Update Contact Info Error:', error);
+    return sendError(res, 500, error.message || 'Failed to update contact info');
   }
 });
 
@@ -265,6 +363,8 @@ module.exports = {
   resetPassword,
   loginUser,
   updateDriverProfile,
+  updateDriverContactInfo,
   getProfile,
+  submitRevision,
   checkUser,
 };

@@ -1,7 +1,9 @@
 const express = require('express');
 const {
   updateDriverProfile,
+  updateDriverContactInfo,
   getProfile,
+  submitRevision,
 } = require('../controllers/userController');
 const { uploadDriverDocuments, handleUploadError } = require('../utils/multer');
 const authenticateJWT = require('../middleware/authMiddleware');
@@ -18,6 +20,8 @@ router.put(
 );
 
 router.get("/profile", authenticateJWT, getProfile);
+router.patch('/contact-info', authenticateJWT, updateDriverContactInfo);
+router.post('/submit-revision', authenticateJWT, submitRevision);
 
 
 module.exports = router;

@@ -8,6 +8,9 @@ const Checkr = require('./checkrService');
 const { generateOTP, sendOTP } = require('./twilioService');
 const { sendPasswordResetEmail, sendVerificationCodeEmail } = require('./emailService');
 
+const { fileUrl } = require('../utils/multer');
+const { resolveDriverTier } = require('./driverTierService');
+
 class AuthServiceError extends Error {
   constructor(message, statusCode = 500) {
     super(message);
@@ -96,6 +99,8 @@ const autoInviteDriverToCheckr = async (userId) => {
     ? `${dash}/reports/${inv.report_id}`
     : `${dash}/candidates/${candidateId}`;
 
+  fullUser.driver.status = 'background_pending';
+
   await fullUser.save();
 };
 
@@ -141,7 +146,7 @@ const startSignup = async ({ identifier, name, role = 'customer' }) => {
       throw new AuthServiceError('Invalid email address', 400);
     }
 
-    const existingUser = await User.findOne({ email: normalizedEmail }).lean();
+    const existingUser = await User.findOne({ email: normalizedEmail, role: normalizedRole }).lean();
     if (existingUser) {
       throw new AuthServiceError('An account with this email already exists', 409);
     }
@@ -175,7 +180,7 @@ const startSignup = async ({ identifier, name, role = 'customer' }) => {
       throw new AuthServiceError('Invalid phone number', 400);
     }
 
-    const existingUser = await User.findOne({ phone: normalizedPhone }).lean();
+    const existingUser = await User.findOne({ phone: normalizedPhone, role: normalizedRole }).lean();
     if (existingUser) {
       throw new AuthServiceError('An account with this phone number already exists', 409);
     }
@@ -337,7 +342,7 @@ const completeSignup = async ({ tempToken, name, email, profile = {} }) => {
     if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
       throw new AuthServiceError('Valid email is required', 400);
     }
-    const conflict = await User.findOne({ email: normalizedEmail }).lean();
+    const conflict = await User.findOne({ email: normalizedEmail, role: decoded.role || 'customer' }).lean();
     if (conflict) {
       throw new AuthServiceError('An account with this email already exists', 409);
     }
@@ -376,13 +381,15 @@ const completeSignup = async ({ tempToken, name, email, profile = {} }) => {
   return UserService.formatUser(user);
 };
 
-const forgotPassword = async ({ email, resetBaseUrl }) => {
+const forgotPassword = async ({ email, role, resetBaseUrl }) => {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
     throw new AuthServiceError('Valid email is required', 400);
   }
 
-  const user = await User.findOne({ email: normalizedEmail });
+  const query = { email: normalizedEmail };
+  if (role) query.role = role;
+  const user = await User.findOne(query);
 
   if (!user) {
     return { message: 'If this email exists, a password reset link has been sent.' };
@@ -449,37 +456,28 @@ const driverSignupStart = async ({ name, phone, email, password }) => {
   const normalizedEmail = normalizeEmail(email);
 
   const [phoneConflict, emailConflict] = await Promise.all([
-    User.findOne({ phone: normalizedPhone }).lean(),
-    User.findOne({ email: normalizedEmail }).lean(),
+    User.findOne({ phone: normalizedPhone, role: 'driver' }).lean(),
+    User.findOne({ email: normalizedEmail, role: 'driver' }).lean(),
   ]);
   if (phoneConflict) throw new AuthServiceError('An account with this phone already exists', 409);
   if (emailConflict) throw new AuthServiceError('An account with this email already exists', 409);
 
-  const otpCode = generateOTP();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
   const bcrypt = require('bcryptjs');
   const hashedPassword = await bcrypt.hash(String(password), 10);
 
-  await OTPVerification.deleteMany({ phone: normalizedPhone, purpose: 'driver_signup' });
-  await OTPVerification.create({
-    purpose: 'driver_signup',
-    phone: normalizedPhone,
-    code: otpCode,
-    expiresAt,
-    attempts: 0,
-    verified: false,
-    payload: { name: String(name).trim(), email: normalizedEmail, hashedPassword, role: 'driver' },
-  });
+  const driverToken = jwt.sign(
+    {
+      type: 'driver_signup_verified',
+      phone: normalizedPhone,
+      email: normalizedEmail,
+      name: String(name).trim(),
+      hashedPassword,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: '30m' }
+  );
 
-  try {
-    await sendOTP(normalizedPhone, otpCode);
-  } catch (error) {
-    await OTPVerification.deleteMany({ phone: normalizedPhone, purpose: 'driver_signup' });
-    throw new AuthServiceError(error.message || 'Failed to send OTP', 502);
-  }
-
-  return { identifier: normalizedPhone, identifierType: 'phone', expiresIn: '5 minutes' };
+  return { driverToken };
 };
 
 const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, hasOwnVehicle, hasForHireLicense, files }) => {
@@ -491,6 +489,9 @@ const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, hasOwnVeh
   // SSN required only if no for-hire license
   if (!forHireLicense && !ssn) {
     throw new AuthServiceError('SSN is required when you do not have a for-hire license', 400);
+  }
+  if (ssn && !/^\d{3}-\d{2}-\d{4}$/.test(ssn)) {
+    throw new AuthServiceError('SSN must be in the format XXX-XX-XXXX', 400);
   }
 
   // vehicleTypes required only if driver has own vehicle
@@ -539,9 +540,9 @@ const driverSignupDocuments = async ({ driverToken, ssn, vehicleTypes, hasOwnVeh
       vehicleTypes: parsedVehicleTypes,
       hasOwnVehicle: ownVehicle,
       hasForHireLicense: forHireLicense,
-      licenseImage: `/uploads/${licenseImage.filename}`,
-      ...(vehicleImage && { vehicleImage: `/uploads/${vehicleImage.filename}` }),
-      ...(forHireLicenseImage && { forHireLicenseImage: `/uploads/${forHireLicenseImage.filename}` }),
+      licenseImage: fileUrl(licenseImage.filename),
+      ...(vehicleImage && { vehicleImage: fileUrl(vehicleImage.filename) }),
+      ...(forHireLicenseImage && { forHireLicenseImage: fileUrl(forHireLicenseImage.filename) }),
     },
     process.env.JWT_SECRET,
     { expiresIn: '30m' }
@@ -565,8 +566,8 @@ const driverSignupComplete = async ({ docsToken, authorizeBackgroundCheck, files
 
   // Final duplicate check
   const [phoneConflict, emailConflict] = await Promise.all([
-    User.findOne({ phone: decoded.phone }).lean(),
-    User.findOne({ email: decoded.email }).lean(),
+    User.findOne({ phone: decoded.phone, role: 'driver' }).lean(),
+    User.findOne({ email: decoded.email, role: 'driver' }).lean(),
   ]);
   if (phoneConflict) throw new AuthServiceError('An account with this phone already exists', 409);
   if (emailConflict) throw new AuthServiceError('An account with this email already exists', 409);
@@ -590,7 +591,8 @@ const driverSignupComplete = async ({ docsToken, authorizeBackgroundCheck, files
       hasOwnVehicle: !!decoded.hasOwnVehicle,
       forHireLicenseImage: decoded.forHireLicenseImage || null,
       authorizeBackgroundCheck: true,
-      status: 'pending_review',
+      status: 'submitted',
+      tier: resolveDriverTier({ hasOwnVehicle: !!decoded.hasOwnVehicle, hasForHireLicense: !!decoded.hasForHireLicense }),
     },
   });
 
