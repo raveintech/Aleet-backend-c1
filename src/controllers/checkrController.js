@@ -8,6 +8,7 @@ const {
   createInvitation,
   mapWebhookToState,
 } = require('../services/checkrService');
+const { sendSuccess, sendValidationError, sendNotFound } = require('../utils/responseHelper');
 
 const DASH = process.env.CHECKR_DASHBOARD_BASE || 'https://dashboard.staging.checkr.com';
 
@@ -194,4 +195,53 @@ exports.webhook = asyncHandler(async (req, res) => {
   console.log('[Checkr Webhook] ── done ─────────────────────────────────────');
 
   res.status(200).json({ received: true });
+});
+
+// POST /checkr/admin/drivers/:id/simulate-clear
+// Temporary admin utility: simulate Checkr "report.completed" with clear result.
+exports.simulateClearReport = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  if (!id) return sendValidationError(res, 'Driver user ID is required');
+
+  const user = await User.findById(id);
+  if (!user) return sendNotFound(res, 'User not found');
+  if (user.role !== 'driver') return sendValidationError(res, 'User is not a driver');
+
+  const event = {
+    type: 'report.completed',
+    data: {
+      object: {
+        object: 'report',
+        id: user.driver?.checkr?.reportId || `manual-report-${String(user._id)}`,
+        candidate_id: user.driver?.checkr?.candidateId || null,
+        result: 'clear',
+        assessment: 'eligible',
+        includes_canceled: false
+      }
+    }
+  };
+
+  const updates = mapWebhookToState(event);
+
+  if (!user.driver) user.driver = {};
+  if (!user.driver.checkr) user.driver.checkr = {};
+
+  if (updates.reportId) {
+    user.driver.checkr.reportId = updates.reportId;
+    user.driver.checkr.dashboardUrl = `${DASH}/reports/${updates.reportId}`;
+    delete updates.reportId;
+  }
+
+  Object.assign(user.driver.checkr, updates);
+  user.driver.status = 'background_completed';
+  user.driver.backgroundCheck = true;
+  user.markModified('driver.checkr');
+  await user.save();
+
+  return sendSuccess(res, 200, 'Simulated Checkr clear report applied', {
+    userId: String(user._id),
+    checkr: user.driver.checkr,
+    driverStatus: user.driver.status,
+    backgroundCheck: user.driver.backgroundCheck
+  });
 });
