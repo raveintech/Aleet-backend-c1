@@ -6,9 +6,9 @@ const mongoose = require('mongoose');
 const stopSchema = new mongoose.Schema({
   location: { type: String, required: true },
 
-  // Client now sends a single "time" + "timeType". We persist normalized "arrivalTime"
+  // Client may send stop time; when present we persist normalized "arrivalTime"
   // and remember semantic (pickup/arrival) for analytics/ops.
-  arrivalTime: { type: Date, required: true },             // normalized time
+  arrivalTime: { type: Date, required: false },            // normalized time (optional)
   timeType: { type: String, enum: ['arrival', 'pickup'], default: 'arrival' },
 
   dwellMinutes: { type: Number, default: 0 },
@@ -39,11 +39,13 @@ const routeLegSchema = new mongoose.Schema({
 const bookingSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   region: { type: String, required: true },
+  bookingMode: { type: String, enum: ['multi_day', 'buy_hours'], default: 'multi_day' },
 
   dates: {
     startDate: { type: Date, required: true }, // pickup time
     endDate: { type: Date, required: true }  // dropoff arrival time
   },
+  durationHours: { type: Number, min: 0, default: null },
 
   vehicleType: { type: mongoose.Schema.Types.ObjectId, ref: 'VehicleType', required: true },
   quantity: { type: Number, min: 1, max: 5, default: 1 },
@@ -63,6 +65,7 @@ const bookingSchema = new mongoose.Schema({
   savings: { type: Number, default: 0 },
 
   addOns: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AddOn' }],
+  freeRouting: { type: Boolean, default: false },
 
   status: { type: String, enum: ['Pending', 'Confirmed', 'Cancelled', 'Completed'], default: 'Pending' },
   bookingDate: { type: Date, default: Date.now },

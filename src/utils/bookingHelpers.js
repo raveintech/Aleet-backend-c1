@@ -55,7 +55,7 @@ function assertIsoUtc(label, value) {
  * @returns {{ bookingHours: number, bookingDays: number }}
  * @throws {Error} on any validation failure
  */
-function validateBookingInput({ region, startDate, endDate, quantity }) {
+function validateBookingInput({ region, startDate, endDate, quantity, bookingMode = 'multi_day', durationHours }) {
     assertIsoUtc('startDate', startDate);
     assertIsoUtc('endDate', endDate);
 
@@ -70,8 +70,14 @@ function validateBookingInput({ region, startDate, endDate, quantity }) {
     const bookingHours = (end - start) / (1000 * 3600);
     const bookingDays = (end - start) / (1000 * 3600 * 24);
 
-    if (bookingHours < 3) throw new Error('Minimum booking is 3 hours');
-    if (bookingDays > 7) throw new Error('Maximum booking is 7 days');
+    if (bookingMode === 'buy_hours') {
+        if (!Number.isFinite(Number(durationHours)) || Number(durationHours) <= 0) {
+            throw new Error('Duration must be a positive number of hours');
+        }
+    } else {
+        if (bookingHours < 3) throw new Error('Minimum booking is 3 hours');
+        if (bookingDays > 7) throw new Error('Maximum booking is 7 days');
+    }
     //if (quantity < 1 || quantity > 5) throw new Error('Quantity must be between 1 and 5');
 
     return { bookingHours, bookingDays };
@@ -83,8 +89,13 @@ function validateBookingInput({ region, startDate, endDate, quantity }) {
  *
  * @throws {Error} on any validation failure
  */
-function validateFinalBookingInput({ pickupLocation, dropoffLocation, stops, freeRouting }) {
+function validateFinalBookingInput({ pickupLocation, dropoffLocation, stops, freeRouting, bookingMode = 'multi_day' }) {
     if (!pickupLocation) throw new Error('Pickup location is required');
+
+    if (bookingMode === 'buy_hours') {
+        if (!dropoffLocation) throw new Error('Dropoff location is required');
+        return;
+    }
 
     // dropoffLocation is optional when freeRouting is enabled
     if (!freeRouting && !dropoffLocation) throw new Error('Dropoff location is required');
@@ -96,8 +107,7 @@ function validateFinalBookingInput({ pickupLocation, dropoffLocation, stops, fre
         for (const s of stops) {
             if (!s.location) throw new Error('Each stop must have a location');
             const rawTime = s.time || s.arrivalTime || s.pickupTime;
-            if (!rawTime) throw new Error('Each stop must include a time (arrival/pickup)');
-            assertIsoUtc(`stop.time (${s.location})`, rawTime);
+            if (rawTime) assertIsoUtc(`stop.time (${s.location})`, rawTime);
             if (s.dwellMinutes != null && isNaN(Number(s.dwellMinutes))) {
                 throw new Error('dwellMinutes must be a number if provided');
             }

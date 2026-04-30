@@ -68,8 +68,9 @@ async function resolveDistanceSurcharge(pickupLocation) {
 const VALIDATION_PHRASES = [
   'Minimum booking', 'Maximum booking', 'Start date', 'Quantity',
   'Region is required', 'Pickup location is required', 'Dropoff location is required',
-  'At least one stop', 'Each stop must have a location', 'Each stop must include a time',
-  'dwellMinutes must be a number', 'Invalid ISO datetime', 'Itinerary validation failed'
+  'At least one stop', 'Each stop must have a location',
+  'dwellMinutes must be a number', 'Invalid ISO datetime', 'Itinerary validation failed',
+  'Duration must be a positive number of hours'
 ];
 
 function isValidationError(msg) {
@@ -99,10 +100,35 @@ const previewBooking = asyncHandler(async (req, res) => {
     const {
       region, startDate, endDate, vehicleTypeId, quantity,
       stops = [], addOns = [], freeRouting = false,
-      pickupLocation, dropoffLocation
+      pickupLocation, dropoffLocation,
+      bookingMode = 'multi_day',
+      durationHours,
+      duration
     } = req.body;
 
-    const { bookingHours } = validateBookingInput({ region, startDate, endDate, quantity });
+    const resolvedBookingMode = bookingMode === 'buy_hours' ? 'buy_hours' : 'multi_day';
+    const effectiveDurationHours = Number(durationHours ?? duration);
+    let effectiveStartDate = startDate;
+    let effectiveEndDate = endDate;
+
+    if (resolvedBookingMode === 'buy_hours') {
+      if (!effectiveStartDate) throw new Error('Start date is required');
+      if (!Number.isFinite(effectiveDurationHours) || effectiveDurationHours <= 0) {
+        throw new Error('Duration must be a positive number of hours');
+      }
+      const startMs = new Date(effectiveStartDate).getTime();
+      if (Number.isNaN(startMs)) throw new Error('Invalid ISO datetime for startDate. Use UTC ISO like 2025-10-12T16:00:00.000Z');
+      effectiveEndDate = new Date(startMs + (effectiveDurationHours * 60 * 60 * 1000)).toISOString();
+    }
+
+    const { bookingHours } = validateBookingInput({
+      region,
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
+      quantity,
+      bookingMode: resolvedBookingMode,
+      durationHours: effectiveDurationHours
+    });
 
     const safeAddOnIds = Array.isArray(addOns) ? addOns.map(toId).filter(Boolean) : [];
     const safeStops = Array.isArray(stops)
@@ -132,7 +158,7 @@ const previewBooking = asyncHandler(async (req, res) => {
       // }
     }
 
-    const currentMonth = `${new Date(startDate).getFullYear()}-${String(new Date(startDate).getMonth() + 1).padStart(2, '0')}`;
+    const currentMonth = `${new Date(effectiveStartDate).getFullYear()}-${String(new Date(effectiveStartDate).getMonth() + 1).padStart(2, '0')}`;
     const monthlyHours = await MonthlyHours.findOne({ user: req.user.id, yearMonth: currentMonth }) || { totalHoursUsed: 0 };
 
     const isSubscriber = user.subscriptionStatus === 'subscriber';
@@ -149,9 +175,11 @@ const previewBooking = asyncHandler(async (req, res) => {
 
     return sendSuccess(res, 200, 'Booking preview calculated', {
       vehicleType,
+      bookingMode: resolvedBookingMode,
       quantity,
-      startDate,
-      endDate,
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
+      durationHours: resolvedBookingMode === 'buy_hours' ? effectiveDurationHours : undefined,
       hours: bookingHours,
       regularPrice: regTotal,
       subscriptionPrice: isSubscriber ? subTotal : undefined,
@@ -176,15 +204,48 @@ const startBooking = asyncHandler(async (req, res) => {
     const {
       region, startDate, endDate, vehicleTypeId, quantity,
       stops = [], addOns = [], freeRouting = false,
-      pickupLocation, dropoffLocation, adminOverride: bodyAdminOverride
+      pickupLocation, dropoffLocation, adminOverride: bodyAdminOverride,
+      bookingMode = 'multi_day',
+      durationHours,
+      duration
     } = req.body;
 
-    const { bookingHours } = validateBookingInput({ region, startDate, endDate, quantity });
-    validateFinalBookingInput({ pickupLocation, dropoffLocation, stops, freeRouting });
+    const resolvedBookingMode = bookingMode === 'buy_hours' ? 'buy_hours' : 'multi_day';
+    const effectiveDurationHours = Number(durationHours ?? duration);
+    let effectiveStartDate = startDate;
+    let effectiveEndDate = endDate;
+    const effectiveFreeRouting = resolvedBookingMode === 'buy_hours' ? true : !!freeRouting;
+    const inputStops = resolvedBookingMode === 'buy_hours' ? [] : stops;
+
+    if (resolvedBookingMode === 'buy_hours') {
+      if (!effectiveStartDate) throw new Error('Start date is required');
+      if (!Number.isFinite(effectiveDurationHours) || effectiveDurationHours <= 0) {
+        throw new Error('Duration must be a positive number of hours');
+      }
+      const startMs = new Date(effectiveStartDate).getTime();
+      if (Number.isNaN(startMs)) throw new Error('Invalid ISO datetime for startDate. Use UTC ISO like 2025-10-12T16:00:00.000Z');
+      effectiveEndDate = new Date(startMs + (effectiveDurationHours * 60 * 60 * 1000)).toISOString();
+    }
+
+    const { bookingHours } = validateBookingInput({
+      region,
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
+      quantity,
+      bookingMode: resolvedBookingMode,
+      durationHours: effectiveDurationHours
+    });
+    validateFinalBookingInput({
+      pickupLocation,
+      dropoffLocation,
+      stops: inputStops,
+      freeRouting: effectiveFreeRouting,
+      bookingMode: resolvedBookingMode
+    });
 
     const safeAddOnIds = Array.isArray(addOns) ? addOns.map(toId).filter(Boolean) : [];
-    const safeStops = Array.isArray(stops)
-      ? stops.map(s => ({ ...s, addOnIds: Array.isArray(s.addOnIds) ? s.addOnIds.map(toId).filter(Boolean) : [] }))
+    const safeStops = Array.isArray(inputStops)
+      ? inputStops.map(s => ({ ...s, addOnIds: Array.isArray(s.addOnIds) ? s.addOnIds.map(toId).filter(Boolean) : [] }))
       : [];
 
     const [user, vehicleType] = await Promise.all([
@@ -215,7 +276,7 @@ const startBooking = asyncHandler(async (req, res) => {
     //   _dispatchFlag = _adminOverride && !routeValidation.allOk;
     // }
 
-    const currentMonth = `${new Date(startDate).getFullYear()}-${String(new Date(startDate).getMonth() + 1).padStart(2, '0')}`;
+    const currentMonth = `${new Date(effectiveStartDate).getFullYear()}-${String(new Date(effectiveStartDate).getMonth() + 1).padStart(2, '0')}`;
     let monthlyHours = await MonthlyHours.findOne({ user: req.user.id, yearMonth: currentMonth });
     if (!monthlyHours) {
       monthlyHours = await MonthlyHours.create({ user: req.user.id, yearMonth: currentMonth, totalHoursUsed: 0 });
@@ -242,9 +303,11 @@ const startBooking = asyncHandler(async (req, res) => {
     const booking = await Booking.create({
       user: req.user.id,
       region,
+      bookingMode: resolvedBookingMode,
       pickupLocation,
       dropoffLocation: dropoffLocation || null,
-      dates: { startDate: new Date(startDate), endDate: new Date(endDate) },
+      dates: { startDate: new Date(effectiveStartDate), endDate: new Date(effectiveEndDate) },
+      durationHours: resolvedBookingMode === 'buy_hours' ? effectiveDurationHours : bookingHours,
       vehicleType: vehicleTypeId,
       quantity,
       stops: safeStops.map(s => ({
@@ -255,7 +318,7 @@ const startBooking = asyncHandler(async (req, res) => {
         addOnIds: s.addOnIds
       })),
       addOns: safeAddOnIds,
-      freeRouting: !!freeRouting,
+      freeRouting: effectiveFreeRouting,
       regularPrice: adjustedRegular,
       subscriptionPrice: isSubscriber ? adjustedSubscriber : undefined,
       finalPrice,
