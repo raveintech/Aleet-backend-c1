@@ -215,7 +215,7 @@ const startBooking = asyncHandler(async (req, res) => {
     let effectiveStartDate = startDate;
     let effectiveEndDate = endDate;
     const effectiveFreeRouting = resolvedBookingMode === 'buy_hours' ? true : !!freeRouting;
-    const inputStops = resolvedBookingMode === 'buy_hours' ? [] : stops;
+    const inputStops = stops;
 
     if (resolvedBookingMode === 'buy_hours') {
       if (!effectiveStartDate) throw new Error('Start date is required');
@@ -528,6 +528,7 @@ const getMyBookings = asyncHandler(async (req, res) => {
 
     const filter = { user: req.user.id };
     if (req.query.status) filter.status = req.query.status;
+    if (req.query.bookingMode) filter.bookingMode = req.query.bookingMode;
 
     const [bookings, total] = await Promise.all([
       Booking.find(filter)

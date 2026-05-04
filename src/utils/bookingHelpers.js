@@ -93,7 +93,16 @@ function validateFinalBookingInput({ pickupLocation, dropoffLocation, stops, fre
     if (!pickupLocation) throw new Error('Pickup location is required');
 
     if (bookingMode === 'buy_hours') {
-        if (!dropoffLocation) throw new Error('Dropoff location is required');
+        if (Array.isArray(stops)) {
+            for (const s of stops) {
+                if (!s.location) throw new Error('Each stop must have a location');
+                const rawTime = s.time || s.arrivalTime || s.pickupTime;
+                if (rawTime) assertIsoUtc(`stop.time (${s.location})`, rawTime);
+                if (s.dwellMinutes != null && isNaN(Number(s.dwellMinutes))) {
+                    throw new Error('dwellMinutes must be a number if provided');
+                }
+            }
+        }
         return;
     }
 
