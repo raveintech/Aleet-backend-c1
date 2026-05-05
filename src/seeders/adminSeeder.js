@@ -15,6 +15,7 @@ const testAdmins = [
       permissions: ['super-admin', 'manage-users', 'view-reports', 'manage-bookings']
     }
   },
+
   {
     name: 'Booking Manager',
     email: 'booking.manager@swifthaven.com',
