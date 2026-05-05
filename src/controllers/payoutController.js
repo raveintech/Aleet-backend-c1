@@ -6,7 +6,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-
 const Booking = require('../models/Booking');
 const BankAccount = require('../models/BankAccount');
 
-const CURRENCY = (process.env.CURRENCY || 'usd').toLowerCase();
+const CURRENCY = 'usd'
 const MODE = (process.env.PAYOUT_MODE || 'BUSINESS').toUpperCase(); // BUSINESS | FULL_FINAL
 
 // --- helpers ---
@@ -170,7 +170,7 @@ const payoutEligibleBookings = asyncHandler(async (req, res) => {
       });
 
       await Booking.updateOne(
-        { _id: b._id, PaidToDriver: false,status:"Completed" },
+        { _id: b._id, PaidToDriver: false, status: "Completed" },
         { $set: { PaidToDriver: true, payoutTransferId: transfer.id } }
       );
 

@@ -4,12 +4,15 @@ const {
     confirmBooking,
     acceptBooking,
     getAllBookings,
+    getAdminBookingStats,
     getMyBookings,
     getBookingById,
     previewBooking,
     completeBooking
 } = require('../controllers/bookingController');
 const authenticateJWT = require('../middleware/authMiddleware');
+const requireAdmin = require('../middleware/requireAdmin');
+const { requirePermission } = require('../middleware/requireAdmin');
 const router = express.Router();
 
 // Price preview (no persist)
@@ -21,8 +24,11 @@ router.post('/start', authenticateJWT, startBooking);
 // My bookings (authenticated user)
 router.get('/my', authenticateJWT, getMyBookings);
 
+// Admin — stats for top cards
+router.get('/stats', requireAdmin, requirePermission('view-reports'), getAdminBookingStats);
+
 // Admin — all bookings
-router.get('/', authenticateJWT, getAllBookings);
+router.get('/', requireAdmin, requirePermission('manage-bookings'), getAllBookings);
 
 // Single booking (owner or admin)
 router.get('/:id', authenticateJWT, getBookingById);

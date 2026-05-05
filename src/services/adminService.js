@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 
-const VALID_PERMISSIONS = ['manage-users', 'view-reports', 'manage-bookings'];
+const VALID_PERMISSIONS = ['super-admin', 'manage-users', 'view-reports', 'manage-bookings'];
 
 class AdminServiceError extends Error {
     constructor(message, statusCode = 500) {

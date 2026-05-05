@@ -61,7 +61,7 @@ app.use('/api/admin/admins', adminManagementRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/addons', addOnRoutes);
 app.use('/checkr', checkrRoutes);
-app.use('/api/bankAccounts', bankAccountRoutes);
+app.use('/api/bank-accounts', bankAccountRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/payments', paymentsRoutes);

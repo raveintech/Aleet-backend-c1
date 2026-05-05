@@ -11,7 +11,7 @@ const {
   sendUnauthorized,
 } = require('../utils/responseHelper');
 
-const CURRENCY = (process.env.CURRENCY || 'usd').toLowerCase();
+const CURRENCY = 'usd'
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:5173';
 
 // ===== SUBSCRIPTION MANAGEMENT ===== //
@@ -32,7 +32,7 @@ const createSubscriptionCheckout = asyncHandler(async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
-...(user?.email ? { customer_email: user.email } : {}),
+      ...(user?.email ? { customer_email: user.email } : {}),
       metadata: {
         userId: userId.toString(),
         type: 'subscription',
@@ -77,7 +77,7 @@ const processSubscriptionPayment = asyncHandler(async (req, res) => {
 
     // Retrieve session from Stripe
     const session = await stripe.checkout.sessions.retrieve(sessionId);
-    
+
     if (session.payment_status !== 'paid') {
       return sendValidationError(res, 'Payment not completed');
     }

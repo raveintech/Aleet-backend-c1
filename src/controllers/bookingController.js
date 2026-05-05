@@ -421,7 +421,7 @@ const acceptBooking = asyncHandler(async (req, res) => {
             if (amountCents > 0) {
               const transfer = await stripe.transfers.create({
                 amount: amountCents,
-                currency: (process.env.CURRENCY || 'usd').toLowerCase(),
+                currency: 'usd',
                 destination: bank.stripeAccountId,
                 transfer_group: `booking:${booking._id}`
               });
@@ -457,14 +457,19 @@ const getAllBookings = asyncHandler(async (req, res) => {
   try {
     const { page, limit, skip } = getPagination(req.query);
     const sort = getSorting(req.query.sortBy, req.query.order);
-    const search = getSearchQuery(req.query.search, ['region', 'pickupLocation', 'dropoffLocation', 'status']);
+    const search = getSearchQuery(req.query.search, ['pickupLocation', 'dropoffLocation', 'status']);
+
+    if (req.query.status) search.status = req.query.status;
+    if (req.query.bookingMode) search.bookingMode = req.query.bookingMode;
+    if (req.query.paymentStatus) search.paymentStatus = req.query.paymentStatus;
 
     const [bookings, total] = await Promise.all([
       Booking.find(search)
-        .populate('user', 'name email')
+        .populate('user', 'name email phone')
+        .populate('region', 'name code')
         .populate('vehicleType', 'name hourlyPrice')
         .populate('addOns', 'name price type')
-        .populate('assignedDriver', 'name')
+        .populate('assignedDriver', 'name phone')
         .sort(sort).skip(skip).limit(limit),
       Booking.countDocuments(search)
     ]);
@@ -581,12 +586,54 @@ const getBookingById = asyncHandler(async (req, res) => {
   }
 });
 
+/**
+ * GET /api/bookings/stats
+ * Admin dashboard stats: counts by status + total value + unassigned count.
+ */
+const getAdminBookingStats = asyncHandler(async (req, res) => {
+  try {
+    const [statusCounts, totalValueAgg, unassigned] = await Promise.all([
+      Booking.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      Booking.aggregate([
+        { $group: { _id: null, totalValue: { $sum: '$finalPrice' } } }
+      ]),
+      Booking.countDocuments({ assignedDriver: null, status: { $nin: ['Cancelled', 'Completed', 'Expired'] } })
+    ]);
+
+    const counts = { Pending: 0, Confirmed: 0, 'In Progress': 0, Completed: 0, Cancelled: 0, Expired: 0 };
+    for (const { _id, count } of statusCounts) {
+      if (_id in counts) counts[_id] = count;
+    }
+
+    const totalTrips = Object.values(counts).reduce((a, b) => a + b, 0);
+    const totalValue = totalValueAgg[0]?.totalValue ?? 0;
+
+    return sendSuccess(res, 200, 'Booking stats retrieved', {
+      totalTrips,
+      pending: counts.Pending,
+      confirmed: counts.Confirmed,
+      inProgress: counts['In Progress'],
+      completed: counts.Completed,
+      cancelled: counts.Cancelled,
+      expired: counts.Expired,
+      totalValue: Number(totalValue.toFixed(2)),
+      unassigned
+    });
+  } catch (error) {
+    console.error('Admin Booking Stats Error:', error);
+    return sendError(res, 500, error.message || 'Failed to retrieve booking stats');
+  }
+});
+
 module.exports = {
   previewBooking,
   startBooking,
   confirmBooking,
   acceptBooking,
   getAllBookings,
+  getAdminBookingStats,
   getMyBookings,
   getBookingById,
   completeBooking

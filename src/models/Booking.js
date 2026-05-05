@@ -38,7 +38,7 @@ const routeLegSchema = new mongoose.Schema({
 
 const bookingSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  region: { type: String, required: true },
+  region: { type: mongoose.Schema.Types.ObjectId, ref: 'Region', required: true },
   bookingMode: { type: String, enum: ['multi_day', 'buy_hours'], default: 'multi_day' },
 
   dates: {
@@ -67,7 +67,7 @@ const bookingSchema = new mongoose.Schema({
   addOns: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AddOn' }],
   freeRouting: { type: Boolean, default: false },
 
-  status: { type: String, enum: ['Pending', 'Confirmed', 'Cancelled', 'Completed'], default: 'Pending' },
+  status: { type: String, enum: ['Pending', 'Confirmed', 'Cancelled', 'Completed', 'In Progress', 'Expired'], default: 'Pending' },
   bookingDate: { type: Date, default: Date.now },
 
   // Admin override if itinerary is unrealistic but staff chooses to proceed

@@ -23,4 +23,21 @@ const requireAdmin = async (req, res, next) => {
     }
 };
 
+/**
+ * Middleware factory that checks if the authenticated admin has ALL of the specified permissions.
+ * Must be used AFTER requireAdmin (which populates req.user).
+ *
+ * Usage: requirePermission('manage-users')
+ *        requirePermission('super-admin')
+ */
+const requirePermission = (...permissions) => (req, res, next) => {
+    const userPermissions = req.user?.admin?.permissions ?? [];
+    const missing = permissions.filter((p) => !userPermissions.includes(p));
+    if (missing.length > 0) {
+        return sendForbidden(res, `Missing required permission(s): ${missing.join(', ')}`);
+    }
+    next();
+};
+
 module.exports = requireAdmin;
+module.exports.requirePermission = requirePermission;

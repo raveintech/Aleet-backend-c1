@@ -68,6 +68,8 @@ const userSchema = new mongoose.Schema(
         },
       ],
 
+      licenseNumber: { type: String, default: null },   // e.g. DL-2024-001
+      licenseExpiry: { type: Date, default: null },      // expiry date of driver's license
       ssn: { type: String },
       licenseImage: { type: String, default: null },
       vehicleImage: { type: String, default: null },
@@ -137,7 +139,7 @@ const userSchema = new mongoose.Schema(
       permissions: [
         {
           type: String,
-          enum: ["manage-users", "view-reports", "manage-bookings"],
+          enum: ["super-admin", "manage-users", "view-reports", "manage-bookings"],
           required: true,
         },
       ],

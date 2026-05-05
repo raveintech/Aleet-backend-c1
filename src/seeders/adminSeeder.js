@@ -12,7 +12,7 @@ const testAdmins = [
     password: 'admin123456',
     role: 'admin',
     admin: {
-      permissions: ['manage-users', 'view-reports', 'manage-bookings']
+      permissions: ['super-admin', 'manage-users', 'view-reports', 'manage-bookings']
     }
   },
   {

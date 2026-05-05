@@ -244,4 +244,93 @@ const uploadAleetLicense = async (req, res) => {
   }
 };
 
-module.exports = { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense };
+/**
+ * GET /api/admin/drivers/licensing
+ * Returns drivers list with licensing & background fields for the admin Licensing page.
+ * Stats: verified (backgroundCheck=true), pending, total.
+ */
+const getDriverLicensing = async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search } = req.query;
+
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const filter = { role: 'driver' };
+    if (search) {
+      const re = new RegExp(search, 'i');
+      filter.$or = [
+        { name: re },
+        { email: re },
+        { phone: re },
+        { 'driver.licenseNumber': re }
+      ];
+    }
+
+    const [drivers, total, verifiedCount, pendingCount] = await Promise.all([
+      User.find(filter)
+        .select('name email phone createdAt driver.tier driver.status driver.backgroundCheck driver.licenseNumber driver.licenseExpiry driver.checkr driver.hasForHireLicense')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      User.countDocuments(filter),
+      User.countDocuments({ role: 'driver', 'driver.backgroundCheck': true }),
+      User.countDocuments({ role: 'driver', 'driver.backgroundCheck': false }),
+    ]);
+
+    const formatted = drivers.map(d => ({
+      _id: d._id,
+      name: d.name,
+      email: d.email,
+      phone: d.phone,
+      registeredAt: d.createdAt,
+      license: {
+        number: d.driver?.licenseNumber || null,
+        expiry: d.driver?.licenseExpiry || null,
+        status: d.driver?.status === 'approved' ? 'Approved' : 'Pending',
+        hasForHireLicense: d.driver?.hasForHireLicense || false
+      },
+      background: {
+        verified: d.driver?.backgroundCheck || false,
+        status: d.driver?.backgroundCheck ? 'Verified' : 'Pending',
+        checkrStatus: d.driver?.checkr?.status || null
+      },
+      tier: d.driver?.tier || null
+    }));
+
+    return sendSuccess(res, 200, 'Driver licensing data retrieved', formatted, {
+      stats: {
+        verified: verifiedCount,
+        pending: pendingCount,
+        total
+      },
+      total,
+      page: pageNum,
+      limit: limitNum,
+      pages: Math.ceil(total / limitNum)
+    });
+  } catch (error) {
+    console.error('Get Driver Licensing Error:', error);
+    return sendError(res, 500, error.message || 'Failed to retrieve licensing data');
+  }
+};
+
+const getSidebarStats = async (req, res) => {
+  try {
+    const [pendingBookings, pendingDriverApprovals] = await Promise.all([
+      Booking.countDocuments({ status: 'Pending' }),
+      User.countDocuments({ role: 'driver', 'driver.status': 'pending' }),
+    ]);
+
+    return sendSuccess(res, 200, 'Sidebar stats retrieved successfully', {
+      pendingBookings,
+      pendingDriverApprovals,
+    });
+  } catch (error) {
+    console.error('Get Sidebar Stats Error:', error);
+    return sendError(res, 500, error.message || 'Failed to retrieve sidebar stats');
+  }
+};
+
+module.exports = { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, getDriverLicensing, getSidebarStats };

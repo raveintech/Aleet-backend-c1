@@ -4,22 +4,23 @@ const {
   getTripHistory,
   getUpcomingTrips,
   getActiveTrips,
+  getDriverDashboard,
+  getDriverTrips,
+  getDriverEarnings,
 } = require('../controllers/dashboardController');
 const authenticateJWT = require('../middleware/authMiddleware');
+const { requireActiveDriver } = require('../middleware/authMiddleware');
 const router = express.Router();
 
-// ===== DASHBOARD ROUTES ===== //
-
-// Get customer dashboard statistics (Upcoming Trips, Active Trips, Total Trips)
+// ===== CUSTOMER DASHBOARD ===== //
 router.get('/stats', authenticateJWT, getDashboardStats);
-
-// Get trip history with filtering and pagination
 router.get('/trips/history', authenticateJWT, getTripHistory);
-
-// Get upcoming trips only
 router.get('/trips/upcoming', authenticateJWT, getUpcomingTrips);
-
-// Get active trips only
 router.get('/trips/active', authenticateJWT, getActiveTrips);
+
+// ===== DRIVER DASHBOARD ===== //
+router.get('/driver', authenticateJWT, requireActiveDriver, getDriverDashboard);
+router.get('/driver/trips', authenticateJWT, requireActiveDriver, getDriverTrips);
+router.get('/driver/earnings', authenticateJWT, requireActiveDriver, getDriverEarnings);
 
 module.exports = router;

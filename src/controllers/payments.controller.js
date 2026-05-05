@@ -5,7 +5,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const Booking = require('../models/Booking');
 const User = require('../models/User');
 
-const CURRENCY = (process.env.CURRENCY || 'usd').toLowerCase();
+const CURRENCY = 'usd';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:5173';
 
 // Convert to minor units (USD -> cents). If you switch to a zero-decimal currency, adjust.
@@ -155,6 +155,21 @@ exports.webhook = async (req, res) => {
           });
           console.log('💾 User subscription activated:', userId);
         }
+      }
+    }
+
+    // ── Stripe Connect: driver bank account onboarding completed ─────────────
+    if (event.type === 'account.updated') {
+      const account = event.data.object;
+      const stripeAccountId = account.id;
+
+      if (account.payouts_enabled && account.details_submitted) {
+        const BankAccount = require('../models/BankAccount');
+        await BankAccount.findOneAndUpdate(
+          { stripeAccountId },
+          { $set: { stripeOnboardingComplete: true } }
+        );
+        console.log('✅ Stripe Connect onboarding complete for:', stripeAccountId);
       }
     }
 
