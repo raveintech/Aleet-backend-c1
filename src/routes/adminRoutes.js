@@ -1,5 +1,5 @@
 const express = require('express');
-const { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, getDriverLicensing, getSidebarStats } = require('../controllers/adminController');
+const { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, getDriverLicensing, getSidebarStats, getAdminDashboard } = require('../controllers/adminController');
 const { getDriverTierPerformance, getTierSettings, updateTierSettings } = require('../controllers/tierController');
 const authenticateJWT = require('../middleware/authMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
@@ -24,6 +24,9 @@ router.post('/drivers/:id/aleet-license', authenticateJWT, uploadSingleForHireLi
 
 // Sidebar stats
 router.get('/sidebar-stats', requireAdmin, requirePermission('view-reports'), getSidebarStats);
+
+// Admin dashboard
+router.get('/dashboard', requireAdmin, requirePermission('view-reports'), getAdminDashboard);
 
 // Tier performance & settings
 router.get('/tiers/performance', requireAdmin, requirePermission('view-reports'), getDriverTierPerformance);
