@@ -167,6 +167,7 @@ const formatUser = (user) => {
     role: user.role,
     isPhoneVerified: user.isPhoneVerified,
     active: user.active,
+    avatar: user.avatar || null,
     createdAt: user.createdAt,
   };
 

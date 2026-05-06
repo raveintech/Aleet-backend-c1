@@ -326,8 +326,10 @@ const updateDriverContactInfo = asyncHandler(async (req, res) => {
     if (!driver || driver.role !== 'driver') return sendNotFound(res, 'Driver not found');
 
     const { name, email, phone } = req.body;
-    if (!name && !email && !phone) {
-      return sendValidationError(res, 'Provide at least one field to update: name, email, or phone');
+    const avatarFile = req.files?.avatar?.[0];
+
+    if (!name && !email && !phone && !avatarFile) {
+      return sendValidationError(res, 'Provide at least one field to update: name, email, phone, or avatar');
     }
 
     if (email && email !== driver.email) {
@@ -344,6 +346,7 @@ const updateDriverContactInfo = asyncHandler(async (req, res) => {
     }
 
     if (name) driver.name = name;
+    if (avatarFile) driver.avatar = fileUrl(avatarFile.filename);
 
     await driver.save();
 

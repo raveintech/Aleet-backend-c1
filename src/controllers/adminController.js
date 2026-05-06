@@ -100,6 +100,7 @@ const formatDriverForAdmin = (driver) => ({
   name: driver.name,
   email: driver.email,
   phone: driver.phone,
+  avatar: driver.avatar || null,
   createdAt: driver.createdAt,
   driver: {
     tier: driver.driver?.tier,

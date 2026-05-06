@@ -11,6 +11,7 @@ const userSchema = new mongoose.Schema(
     isPhoneVerified: { type: Boolean, default: false }, // Track phone verification status
     resetPasswordToken: { type: String, default: null },
     resetPasswordExpires: { type: Date, default: null },
+    avatar: { type: String, default: null },
 
     // Role to differentiate between Admin, Driver, Customer
     role: {

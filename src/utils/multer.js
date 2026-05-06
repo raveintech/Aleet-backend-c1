@@ -57,6 +57,11 @@ const uploadNone = upload.none();
 // Single for-hire license image upload (used by admin to attach Aleet-generated license)
 const uploadSingleForHireLicense = upload.single('forHireLicenseImage');
 
+// Avatar upload (used by /api/users/contact-info)
+const uploadAvatar = upload.fields([
+  { name: 'avatar', maxCount: 1 },
+]);
+
 // Error handling middleware
 const handleUploadError = (error, req, res, next) => {
   if (error instanceof multer.MulterError) {
@@ -76,8 +81,6 @@ const handleUploadError = (error, req, res, next) => {
   next(error);
 };
 
-module.exports = { uploadDriverDocuments, uploadDriverComplete, uploadSingleForHireLicense, handleUploadError, uploadNone };
-
 /**
  * Build a fully-qualified URL for an uploaded file.
  * Falls back to a relative path when APP_URL is not set.
@@ -90,4 +93,4 @@ const fileUrl = (filename) => {
   return base ? `${base}/uploads/${filename}` : `/uploads/${filename}`;
 };
 
-module.exports = { uploadDriverDocuments, uploadDriverComplete, uploadSingleForHireLicense, handleUploadError, uploadNone, fileUrl };
+module.exports = { uploadDriverDocuments, uploadDriverComplete, uploadSingleForHireLicense, uploadAvatar, handleUploadError, uploadNone, fileUrl };

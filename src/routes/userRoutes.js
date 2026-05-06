@@ -6,7 +6,7 @@ const {
   submitRevision,
   deleteAccount,
 } = require('../controllers/userController');
-const { uploadDriverDocuments, handleUploadError } = require('../utils/multer');
+const { uploadDriverDocuments, uploadAvatar, handleUploadError } = require('../utils/multer');
 const authenticateJWT = require('../middleware/authMiddleware');
 const router = express.Router();
 
@@ -21,7 +21,7 @@ router.put(
 );
 
 router.get("/profile", authenticateJWT, getProfile);
-router.patch('/contact-info', authenticateJWT, updateDriverContactInfo);
+router.patch('/contact-info', authenticateJWT, uploadAvatar, handleUploadError, updateDriverContactInfo);
 router.post('/submit-revision', authenticateJWT, submitRevision);
 router.delete('/delete-account', authenticateJWT, deleteAccount);
 
