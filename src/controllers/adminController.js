@@ -114,6 +114,8 @@ const formatDriverForAdmin = (driver) => ({
     forHireLicenseImage: driver.driver?.forHireLicenseImage,
     driverRating: driver.driver?.driverRating,
     ssn: maskSSN(driver.driver?.ssn),
+    regions: Array.isArray(driver.driver?.regions) ? driver.driver.regions : [],
+    serveAllRegions: driver.driver?.serveAllRegions !== false,
     revisionNotes: driver.driver?.revisionNotes || null,
     checkr: driver.driver?.checkr
       ? {
@@ -144,7 +146,7 @@ const getAllDrivers = async (req, res) => {
 
     const [drivers, total, approvedCount, rejectedCount, pendingCount] = await Promise.all([
       User.find(filter)
-        .select('-password')
+        .select('-password +driver.ssn')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum),
@@ -243,6 +245,33 @@ const uploadAleetLicense = async (req, res) => {
   } catch (error) {
     console.error('Upload Aleet License Error:', error);
     return sendError(res, 500, error.message || 'Failed to upload license');
+  }
+};
+
+// ── Admin: update a driver's service regions ──────────────────────────────
+const mongooseLib = require('mongoose');
+const updateDriverRegions = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { regions, serveAllRegions } = req.body;
+    if (!Array.isArray(regions)) {
+      return sendValidationError(res, '`regions` must be an array of region IDs');
+    }
+    const cleanIds = regions.filter((r) => mongooseLib.Types.ObjectId.isValid(r));
+    const allFlag = serveAllRegions === undefined ? cleanIds.length === 0 : !!serveAllRegions;
+
+    const driver = await User.findOne({ _id: id, role: 'driver' });
+    if (!driver) return sendNotFound(res, 'Driver not found');
+
+    driver.driver = driver.driver || {};
+    driver.driver.regions = cleanIds;
+    driver.driver.serveAllRegions = allFlag;
+    await driver.save();
+
+    return sendSuccess(res, 200, 'Driver regions updated', formatDriverForAdmin(driver));
+  } catch (error) {
+    console.error('Update Driver Regions Error:', error);
+    return sendError(res, 500, error.message || 'Failed to update regions');
   }
 };
 
@@ -479,4 +508,4 @@ const getAdminDashboard = async (req, res) => {
   }
 };
 
-module.exports = { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, getDriverLicensing, getSidebarStats, getAdminDashboard };
+module.exports = { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard };

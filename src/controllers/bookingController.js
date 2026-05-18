@@ -16,6 +16,7 @@ const Booking = require('../models/Booking');
 const User = require('../models/User');
 const VehicleType = require('../models/Vehicle');
 const MonthlyHours = require('../models/MonthlyHours');
+const TierSettings = require('../models/TierSettings');
 
 const { getPagination, getSorting, getSearchQuery } = require('../utils/queryHelper');
 const {
@@ -28,6 +29,7 @@ const {
 } = require('../utils/responseHelper');
 const { computePayoutCents } = require('../services/payoutUtils');
 const { getMilesFromBase } = require('../services/googleRoutesService');
+const { sendTripAlertSMS } = require('../services/twilioService');
 const {
   toId,
   validateBookingInput,
@@ -60,6 +62,79 @@ async function resolveDistanceSurcharge(pickupLocation) {
 
   const surcharge = miles > 20 ? Number(((miles - 20) * 2).toFixed(2)) : 0;
   return { baseToPickupMiles: miles, distanceSurcharge: surcharge };
+}
+
+// ---------------------------------------------------------------------------
+// Shared: fire-and-forget trip-alert SMS (SMS failure must not break booking ops)
+// ---------------------------------------------------------------------------
+function safeSendTripAlert(phone, message) {
+  if (!phone || !message) return;
+  Promise.resolve(sendTripAlertSMS(phone, message)).catch((err) => {
+    console.error('Trip-alert SMS failed:', err?.message || err);
+  });
+}
+
+function formatTripWindow(startDate) {
+  try {
+    return new Date(startDate).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared: membership-trip marker — only Pro & Diamond can fulfill these
+// ---------------------------------------------------------------------------
+function isMembershipTrip(booking) {
+  return booking?.subscriptionPrice != null;
+}
+
+// ---------------------------------------------------------------------------
+// Shared: region binding — true if the driver is allowed to serve this region
+// ---------------------------------------------------------------------------
+function driverServesRegion(driverDoc, regionId) {
+  if (!driverDoc || !regionId) return false;
+  const d = driverDoc.driver || {};
+  // Default-open: serve all unless explicitly restricted
+  if (d.serveAllRegions !== false) return true;
+  const allowed = Array.isArray(d.regions) ? d.regions : [];
+  return allowed.some((r) => String(r) === String(regionId));
+}
+
+// ---------------------------------------------------------------------------
+// Shared: driver-scoped booking DTO — hides guest totals, exposes payout only
+// ---------------------------------------------------------------------------
+function toDriverBooking(booking, driver, settings) {
+  const obj = booking?.toObject ? booking.toObject() : booking;
+  if (!obj) return obj;
+  const payoutCents = computePayoutCents(obj, driver, settings);
+  return {
+    _id: obj._id,
+    status: obj.status,
+    region: obj.region,
+    bookingMode: obj.bookingMode,
+    dates: obj.dates,
+    durationHours: obj.durationHours,
+    vehicleType: obj.vehicleType,
+    quantity: obj.quantity,
+    pickupLocation: obj.pickupLocation,
+    dropoffLocation: obj.dropoffLocation,
+    stops: obj.stops,
+    assignedDriver: obj.assignedDriver,
+    addOns: obj.addOns,
+    freeRouting: obj.freeRouting,
+    tip: obj.tip,
+    completedAt: obj.completedAt,
+    paymentStatus: obj.paymentStatus,
+    PaidToDriver: obj.PaidToDriver,
+    payoutCents,
+    payoutDollars: Math.round(payoutCents) / 100,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -121,20 +196,6 @@ const previewBooking = asyncHandler(async (req, res) => {
       effectiveEndDate = new Date(startMs + (effectiveDurationHours * 60 * 60 * 1000)).toISOString();
     }
 
-    const { bookingHours } = validateBookingInput({
-      region,
-      startDate: effectiveStartDate,
-      endDate: effectiveEndDate,
-      quantity,
-      bookingMode: resolvedBookingMode,
-      durationHours: effectiveDurationHours
-    });
-
-    const safeAddOnIds = Array.isArray(addOns) ? addOns.map(toId).filter(Boolean) : [];
-    const safeStops = Array.isArray(stops)
-      ? stops.map(s => ({ ...s, addOnIds: Array.isArray(s.addOnIds) ? s.addOnIds.map(toId).filter(Boolean) : [] }))
-      : [];
-
     const [user, vehicleType] = await Promise.all([
       User.findById(req.user.id),
       VehicleType.findById(vehicleTypeId)
@@ -142,26 +203,33 @@ const previewBooking = asyncHandler(async (req, res) => {
     if (!user) return sendNotFound(res, 'User not found');
     if (!vehicleType) return sendValidationError(res, 'Invalid vehicle type');
 
-    // Route validation — only when all location data is present
+    const isSubscriber = user.subscriptionStatus === 'subscriber';
+
+    const { bookingHours } = validateBookingInput({
+      region,
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
+      quantity,
+      bookingMode: resolvedBookingMode,
+      durationHours: effectiveDurationHours,
+      isSubscriber,
+    });
+
+    const safeAddOnIds = Array.isArray(addOns) ? addOns.map(toId).filter(Boolean) : [];
+    const safeStops = Array.isArray(stops)
+      ? stops.map(s => ({ ...s, addOnIds: Array.isArray(s.addOnIds) ? s.addOnIds.map(toId).filter(Boolean) : [] }))
+      : [];
+
+    // Route validation — only when all location data is present (non-blocking on preview)
     let routeValidation = null;
     if (!freeRouting && pickupLocation && dropoffLocation && safeStops.length > 0) {
       const itinerary = buildItineraryFromBody({ ...req.body, stops: safeStops });
       routeValidation = await validateItinerary(itinerary, { bufferMinutes: 15 });
-      // Uncomment to enforce route validation:
-      // if (!routeValidation.allOk) {
-      //   const firstFail = routeValidation.legs.find(l => !l.ok) || routeValidation.legs[0];
-      //   const mins = firstFail?.minRequiredGapSec ? Math.ceil(firstFail.minRequiredGapSec / 60) : 'unknown';
-      //   return sendValidationError(res,
-      //     `Minimum required time is ${mins} mins for "${firstFail.from} → ${firstFail.to}".`,
-      //     { routeValidation }
-      //   );
-      // }
     }
 
     const currentMonth = `${new Date(effectiveStartDate).getFullYear()}-${String(new Date(effectiveStartDate).getMonth() + 1).padStart(2, '0')}`;
     const monthlyHours = await MonthlyHours.findOne({ user: req.user.id, yearMonth: currentMonth }) || { totalHoursUsed: 0 };
 
-    const isSubscriber = user.subscriptionStatus === 'subscriber';
     const { regularPrice, subscriberPrice, breakdown } = await calculateBookingPrice({
       vehicleType, quantity, addOns: safeAddOnIds, isSubscriber,
       usedHours: monthlyHours.totalHoursUsed, bookingHours
@@ -227,13 +295,23 @@ const startBooking = asyncHandler(async (req, res) => {
       effectiveEndDate = new Date(startMs + (effectiveDurationHours * 60 * 60 * 1000)).toISOString();
     }
 
+    const [user, vehicleType] = await Promise.all([
+      User.findById(req.user.id),
+      VehicleType.findById(vehicleTypeId)
+    ]);
+    if (!user) return sendNotFound(res, 'User not found');
+    if (!vehicleType) return sendValidationError(res, 'Invalid vehicle type');
+
+    const isSubscriber = user.subscriptionStatus === 'subscriber';
+
     const { bookingHours } = validateBookingInput({
       region,
       startDate: effectiveStartDate,
       endDate: effectiveEndDate,
       quantity,
       bookingMode: resolvedBookingMode,
-      durationHours: effectiveDurationHours
+      durationHours: effectiveDurationHours,
+      isSubscriber,
     });
     validateFinalBookingInput({
       pickupLocation,
@@ -248,33 +326,32 @@ const startBooking = asyncHandler(async (req, res) => {
       ? inputStops.map(s => ({ ...s, addOnIds: Array.isArray(s.addOnIds) ? s.addOnIds.map(toId).filter(Boolean) : [] }))
       : [];
 
-    const [user, vehicleType] = await Promise.all([
-      User.findById(req.user.id),
-      VehicleType.findById(vehicleTypeId)
-    ]);
-    if (!user) return sendNotFound(res, 'User not found');
-    if (!vehicleType) return sendValidationError(res, 'Invalid vehicle type');
-
-    // Route validation (admin override supported)
+    // Route validation (admin override supported) — enforces the 15-min buffer per leg
     let routeValidation = null;
     let _adminOverride = false;
     let _dispatchFlag = false;
-    // Uncomment to enforce:
-    // if (!freeRouting) {
-    //   const itinerary = buildItineraryFromBody({ ...req.body, stops: safeStops });
-    //   routeValidation = await validateItinerary(itinerary, { bufferMinutes: 15 });
-    //   const isAdmin = ['admin', 'staff'].includes(req.user.role);
-    //   _adminOverride = !!bodyAdminOverride && isAdmin;
-    //   if (!routeValidation.allOk && !_adminOverride) {
-    //     const firstFail = routeValidation.legs.find(l => !l.ok) || routeValidation.legs[0];
-    //     const mins = firstFail?.minRequiredGapSec ? Math.ceil(firstFail.minRequiredGapSec / 60) : 'unknown';
-    //     return sendValidationError(res,
-    //       `Minimum required time is ${mins} mins for "${firstFail.from} → ${firstFail.to}".`,
-    //       { routeValidation }
-    //     );
-    //   }
-    //   _dispatchFlag = _adminOverride && !routeValidation.allOk;
-    // }
+    if (!effectiveFreeRouting && pickupLocation && dropoffLocation && safeStops.length > 0) {
+      const itinerary = buildItineraryFromBody({
+        pickupLocation,
+        dropoffLocation,
+        startDate: effectiveStartDate,
+        endDate: effectiveEndDate,
+        stops: safeStops,
+      });
+      routeValidation = await validateItinerary(itinerary, { bufferMinutes: 15 });
+      const isAdmin = ['admin', 'staff'].includes(req.user.role);
+      _adminOverride = !!bodyAdminOverride && isAdmin;
+      if (!routeValidation.allOk && !_adminOverride) {
+        const firstFail = routeValidation.legs.find((l) => !l.ok) || routeValidation.legs[0];
+        const mins = firstFail?.minRequiredGapSec ? Math.ceil(firstFail.minRequiredGapSec / 60) : 'unknown';
+        return sendValidationError(
+          res,
+          `Minimum required time is ${mins} mins for "${firstFail.from} → ${firstFail.to}".`,
+          { routeValidation }
+        );
+      }
+      _dispatchFlag = _adminOverride && !routeValidation.allOk;
+    }
 
     const currentMonth = `${new Date(effectiveStartDate).getFullYear()}-${String(new Date(effectiveStartDate).getMonth() + 1).padStart(2, '0')}`;
     let monthlyHours = await MonthlyHours.findOne({ user: req.user.id, yearMonth: currentMonth });
@@ -282,7 +359,6 @@ const startBooking = asyncHandler(async (req, res) => {
       monthlyHours = await MonthlyHours.create({ user: req.user.id, yearMonth: currentMonth, totalHoursUsed: 0 });
     }
 
-    const isSubscriber = user.subscriptionStatus === 'subscriber';
     const { regularPrice, subscriberPrice, breakdown } = await calculateBookingPrice({
       vehicleType, quantity, addOns: safeAddOnIds, stops: safeStops, isSubscriber,
       usedHours: monthlyHours.totalHoursUsed, bookingHours
@@ -371,8 +447,47 @@ const confirmBooking = asyncHandler(async (req, res) => {
 
     if (!booking.assignedDriver) return sendValidationError(res, 'Driver assignment required');
 
+    // Tier + region gates — same rules whether admin assigns or driver self-confirms
+    const resolvedDriver = await User.findById(booking.assignedDriver)
+      .select('role driver.tier driver.regions driver.serveAllRegions')
+      .lean();
+    if (!resolvedDriver || resolvedDriver.role !== 'driver') {
+      return sendValidationError(res, 'Invalid driver');
+    }
+    if (isMembershipTrip(booking) && resolvedDriver.driver?.tier === 'S-Level') {
+      return sendForbidden(res, 'Membership trips can only be assigned to Pro or Diamond drivers');
+    }
+    if (!driverServesRegion(resolvedDriver, booking.region)) {
+      return sendForbidden(res, "This driver doesn't serve the booking's region");
+    }
+
     booking.status = 'Confirmed';
     await booking.save();
+
+    // Trip-alert SMS — notify guest + driver
+    const [guest, driver] = await Promise.all([
+      User.findById(booking.user).select('phone name').lean(),
+      User.findById(booking.assignedDriver).select('phone name').lean(),
+    ]);
+    const tripWindow = formatTripWindow(booking.dates?.startDate);
+    if (guest?.phone) {
+      safeSendTripAlert(
+        guest.phone,
+        `Aleet: Your driver has been assigned for your trip${tripWindow ? ` on ${tripWindow}` : ''}. Track details in the app.`
+      );
+    }
+    if (driver?.phone && req.user.role === 'admin') {
+      safeSendTripAlert(
+        driver.phone,
+        `Aleet: You've been assigned a new trip${tripWindow ? ` on ${tripWindow}` : ''}. Open the driver app for details.`
+      );
+    }
+
+    if (req.user.role === 'driver') {
+      const settings = await TierSettings.findOne().lean();
+      const driverDoc = await User.findById(req.user.id).lean();
+      return sendSuccess(res, 200, 'Booking confirmed successfully', toDriverBooking(booking, driverDoc, settings));
+    }
 
     return sendSuccess(res, 200, 'Booking confirmed successfully', booking);
   } catch (error) {
@@ -405,10 +520,34 @@ const acceptBooking = asyncHandler(async (req, res) => {
       return sendValidationError(res, 'Driver lacks required vehicle type');
     }
 
+    // Tier gate — membership trips can only be fulfilled by Pro / Diamond
+    if (action === 'accept' && isMembershipTrip(booking) && driver.driver?.tier === 'S-Level') {
+      return sendForbidden(res, 'Membership trips are restricted to Pro and Diamond drivers');
+    }
+
+    // Region gate — driver must serve the booking's region (default-open)
+    if (action === 'accept' && !driverServesRegion(driver, booking.region)) {
+      return sendForbidden(res, "This trip is outside the regions you serve");
+    }
+
     if (action === 'accept') {
       booking.status = 'Confirmed';
       booking.assignedDriver = driverId;
       await booking.save();
+
+      // Trip-alert SMS — notify guest the driver is on the way
+      try {
+        const guest = await User.findById(booking.user).select('phone').lean();
+        const tripWindow = formatTripWindow(booking.dates?.startDate);
+        if (guest?.phone) {
+          safeSendTripAlert(
+            guest.phone,
+            `Aleet: A driver has accepted your trip${tripWindow ? ` on ${tripWindow}` : ''}. Open the app to view details.`
+          );
+        }
+      } catch (e) {
+        console.error('⚠️ Guest trip-alert lookup failed:', e.message);
+      }
 
       // Diamond Tier — Instant Payout
       try {
@@ -440,6 +579,12 @@ const acceptBooking = asyncHandler(async (req, res) => {
       await booking.save();
     } else {
       return sendValidationError(res, 'Invalid action. Must be "accept" or "decline"');
+    }
+
+    // Driver-scoped DTO — hide guest pricing, expose payout only
+    if (req.user.role === 'driver') {
+      const settings = await TierSettings.findOne().lean();
+      return sendSuccess(res, 200, `Booking ${action}ed successfully`, toDriverBooking(booking, driver, settings));
     }
 
     return sendSuccess(res, 200, `Booking ${action}ed successfully`, booking);

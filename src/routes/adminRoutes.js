@@ -1,5 +1,5 @@
 const express = require('express');
-const { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, getDriverLicensing, getSidebarStats, getAdminDashboard } = require('../controllers/adminController');
+const { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard } = require('../controllers/adminController');
 const { getDriverTierPerformance, getTierSettings, updateTierSettings } = require('../controllers/tierController');
 const authenticateJWT = require('../middleware/authMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
@@ -21,6 +21,9 @@ router.patch('/drivers/request-revision', requireAdmin, requirePermission('manag
 
 // Aleet license upload (authenticated user — driver uploads their own)
 router.post('/drivers/:id/aleet-license', authenticateJWT, uploadSingleForHireLicense, handleUploadError, uploadAleetLicense);
+
+// Update a driver's service regions
+router.put('/drivers/:id/regions', requireAdmin, requirePermission('manage-users'), updateDriverRegions);
 
 // Sidebar stats
 router.get('/sidebar-stats', requireAdmin, requirePermission('view-reports'), getSidebarStats);

@@ -234,9 +234,9 @@ const updateDriverProfile = asyncHandler(async (req, res) => {
     const updateData = {};
 
     if (ssn) {
-      if (!/^\d{3}-\d{2}-\d{4}$/.test(ssn)) {
-        return sendValidationError(res, 'SSN must be in the format XXX-XX-XXXX');
-      }
+      const { validateSSN } = require('../utils/ssnValidator');
+      const v = validateSSN(ssn);
+      if (!v.valid) return sendValidationError(res, v.error);
       updateData['driver.ssn'] = ssn;
     }
 
@@ -283,7 +283,8 @@ const updateDriverProfile = asyncHandler(async (req, res) => {
 
     return sendSuccess(res, 200, 'Driver profile updated successfully', UserService.formatUser(user));
   } catch (error) {
-    console.error('Update Profile Error:', error);
+    // Log only message — request body can contain SSN
+    console.error('Update Profile Error:', error?.message || 'unknown error');
     return sendError(res, 500, error.message || 'Profile update failed');
   }
 });
@@ -291,7 +292,7 @@ const updateDriverProfile = asyncHandler(async (req, res) => {
 // Get profile (unchanged)
 const getProfile = asyncHandler(async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).select('+driver.ssn');
     if (!user) return sendNotFound(res, 'User not found');
     return sendSuccess(res, 200, 'Profile retrieved successfully', UserService.formatUser(user));
   } catch (error) {
@@ -385,6 +386,38 @@ const deleteAccount = asyncHandler(async (req, res) => {
   }
 });
 
+// -------------------- DRIVER: UPDATE OWN SERVICE REGIONS --------------------
+const mongooseLib = require('mongoose');
+const updateMyRegions = asyncHandler(async (req, res) => {
+  try {
+    const { regions, serveAllRegions } = req.body;
+    if (!Array.isArray(regions)) {
+      return sendValidationError(res, '`regions` must be an array of region IDs');
+    }
+    const cleanIds = regions.filter((id) => mongooseLib.Types.ObjectId.isValid(id));
+    const allFlag = serveAllRegions === undefined ? cleanIds.length === 0 : !!serveAllRegions;
+
+    const user = await User.findById(req.user.id);
+    if (!user) return sendNotFound(res, 'User not found');
+    if (user.role !== 'driver') {
+      return sendValidationError(res, 'Only drivers can set service regions');
+    }
+
+    user.driver = user.driver || {};
+    user.driver.regions = cleanIds;
+    user.driver.serveAllRegions = allFlag;
+    await user.save();
+
+    return sendSuccess(res, 200, 'Service regions updated', {
+      regions: user.driver.regions,
+      serveAllRegions: user.driver.serveAllRegions,
+    });
+  } catch (error) {
+    console.error('Update My Regions Error:', error);
+    return sendError(res, 500, error.message || 'Failed to update regions');
+  }
+});
+
 module.exports = {
   signupStart,
   signupVerify,
@@ -399,4 +432,5 @@ module.exports = {
   submitRevision,
   checkUser,
   deleteAccount,
+  updateMyRegions,
 };

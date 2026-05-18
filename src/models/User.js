@@ -69,9 +69,20 @@ const userSchema = new mongoose.Schema(
         },
       ],
 
+      /**
+       * Regions this driver serves. Empty array + serveAllRegions=true means
+       * the driver is available in every currently-active region (default-open).
+       * Setting serveAllRegions=false and providing a non-empty list restricts
+       * the driver to only those regions.
+       */
+      regions: [
+        { type: mongoose.Schema.Types.ObjectId, ref: "Region" },
+      ],
+      serveAllRegions: { type: Boolean, default: true },
+
       licenseNumber: { type: String, default: null },   // e.g. DL-2024-001
       licenseExpiry: { type: Date, default: null },      // expiry date of driver's license
-      ssn: { type: String },
+      ssn: { type: String, select: false },
       licenseImage: { type: String, default: null },
       vehicleImage: { type: String, default: null },
       forHireLicenseImage: { type: String, default: null },

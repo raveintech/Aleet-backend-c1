@@ -4,7 +4,7 @@ const path = require('path');
 const connectDB = require('./config/db'); // 🟢 DB connection
 
 // Load environment variables
-dotenv.config({ path: require('path').resolve(__dirname, '../.env.local') });
+dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
 
 // Connect to MongoDB 🟡
 connectDB();
