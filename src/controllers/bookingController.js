@@ -145,7 +145,8 @@ const VALIDATION_PHRASES = [
   'Region is required', 'Pickup location is required', 'Dropoff location is required',
   'At least one stop', 'Each stop must have a location',
   'dwellMinutes must be a number', 'Invalid ISO datetime', 'Itinerary validation failed',
-  'Duration must be a positive number of hours'
+  'Duration must be a positive number of hours',
+  'Earliest pickup'
 ];
 
 function isValidationError(msg) {
