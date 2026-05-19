@@ -13,6 +13,12 @@ const userSchema = new mongoose.Schema(
     resetPasswordExpires: { type: Date, default: null },
     avatar: { type: String, default: null },
 
+    // SMS preferences.
+    // smsOptIn: transactional SMS (booking lifecycle alerts). Default true — required for service.
+    // smsPromoOptIn: marketing SMS (promos, re-engagement). Default false — requires explicit opt-in.
+    smsOptIn: { type: Boolean, default: true },
+    smsPromoOptIn: { type: Boolean, default: false },
+
     // Role to differentiate between Admin, Driver, Customer
     role: {
       type: String,

@@ -405,6 +405,10 @@ const startBooking = asyncHandler(async (req, res) => {
       dispatchFlag: _dispatchFlag
     });
 
+    sendTripAlert(user, 'guest_booking_received', {
+      when: formatTripTime(effectiveStartDate),
+    }).catch(e => console.error('SMS guest_booking_received failed:', e?.message));
+
     return sendSuccess(res, 201, 'Booking started successfully', {
       booking,
       comparison: !isSubscriber ? {
@@ -435,14 +439,16 @@ const confirmBooking = asyncHandler(async (req, res) => {
     if (!booking) return sendNotFound(res, 'Booking not found');
     if (booking.status === 'Confirmed') return sendValidationError(res, 'Booking already confirmed');
 
+    let assignedDriverDoc = null;
     if (req.user.role === 'admin' && driverId) {
-      const driver = await User.findById(driverId);
-      if (!driver || driver.role !== 'driver') return sendValidationError(res, 'Invalid driver');
+      assignedDriverDoc = await User.findById(driverId);
+      if (!assignedDriverDoc || assignedDriverDoc.role !== 'driver') return sendValidationError(res, 'Invalid driver');
       booking.assignedDriver = driverId;
     }
 
     if (req.user.role === 'driver' && !driverId) {
       booking.assignedDriver = req.user.id;
+      assignedDriverDoc = await User.findById(req.user.id);
     }
 
     if (!booking.assignedDriver) return sendValidationError(res, 'Driver assignment required');
@@ -577,6 +583,19 @@ const acceptBooking = asyncHandler(async (req, res) => {
       booking.status = 'Cancelled';
       booking.assignedDriver = null;
       await booking.save();
+
+      // Notify guest of cancellation (fire-and-forget)
+      (async () => {
+        try {
+          const guest = await User.findById(booking.user);
+          if (guest) {
+            sendTripAlert(guest, 'guest_trip_cancelled', {})
+              .catch(e => console.error('SMS guest_trip_cancelled failed:', e?.message));
+          }
+        } catch (e) {
+          console.error('SMS decline dispatch failed:', e?.message);
+        }
+      })();
     } else {
       return sendValidationError(res, 'Invalid action. Must be "accept" or "decline"');
     }
@@ -659,6 +678,19 @@ const completeBooking = asyncHandler(async (req, res) => {
     booking.status = 'Completed';
     booking.completedAt = now;
     await booking.save();
+
+    // Notify guest of completion (fire-and-forget)
+    (async () => {
+      try {
+        const guest = await User.findById(booking.user);
+        if (guest) {
+          sendTripAlert(guest, 'guest_trip_completed', {})
+            .catch(e => console.error('SMS guest_trip_completed failed:', e?.message));
+        }
+      } catch (e) {
+        console.error('SMS completeBooking dispatch failed:', e?.message);
+      }
+    })();
 
     return sendSuccess(res, 200, 'Booking completed successfully', booking);
   } catch (error) {
