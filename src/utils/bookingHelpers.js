@@ -89,11 +89,16 @@ function validateBookingInput({ region, startDate, endDate, quantity, bookingMod
         if (!Number.isFinite(Number(durationHours)) || Number(durationHours) <= 0) {
             throw new Error('Duration must be a positive number of hours');
         }
-    } else {
+    } else if (!isSubscriber) {
+        // Members are exempt from min/max duration limits ("Members = no minimums").
         if (bookingHours < 3) throw new Error('Minimum booking is 3 hours');
         if (bookingDays > 7) throw new Error('Maximum booking is 7 days');
     }
-    //if (quantity < 1 || quantity > 5) throw new Error('Quantity must be between 1 and 5');
+
+    // Quantity must be 1-5 when provided. Booking schema defaults to 1 when omitted.
+    if (quantity != null && (!Number.isInteger(Number(quantity)) || Number(quantity) < 1 || Number(quantity) > 5)) {
+        throw new Error('Quantity must be between 1 and 5');
+    }
 
     return { bookingHours, bookingDays };
 }
