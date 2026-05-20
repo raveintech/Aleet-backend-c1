@@ -9,7 +9,7 @@ const {
     getBookingById,
     previewBooking,
     completeBooking
-} = require('../controllers/bookingController');
+} = require('../controllers/bookingController.js');
 const authenticateJWT = require('../middleware/authMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
 const { requirePermission } = require('../middleware/requireAdmin');

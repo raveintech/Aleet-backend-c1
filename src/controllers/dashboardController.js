@@ -517,14 +517,34 @@ const getDriverTrips = asyncHandler(async (req, res) => {
       }
       : {};
 
-    // ── S-Level cannot see membership trips (those with subscriptionPrice set) ─
-    const membershipFilter = tier === 'S-Level' ? { subscriptionPrice: { $exists: false } } : {};
+    // ── Eligibility filters: stop showing trips that would 403 on accept ─────
+    // Keep these in lockstep with the gates in confirmBooking / acceptBooking.
+
+    // S-Level cannot fulfill membership trips (pay split makes them ineligible)
+    const membershipFilter =
+      tier === 'S-Level' ? { subscriptionPrice: { $exists: false } } : {};
+
+    // Region binding: only show trips in regions the driver opts into.
+    // Default-open: serveAllRegions !== false means "everywhere" (no constraint).
+    const driverRegions = Array.isArray(driver.driver?.regions) ? driver.driver.regions : [];
+    const regionFilter =
+      driver.driver?.serveAllRegions !== false ? {} : { region: { $in: driverRegions } };
+
+    // Vehicle-type binding: driver only sees trips for vehicles they're approved for.
+    // An empty vehicleTypes list yields { $in: [] } which matches nothing — that's
+    // intentional: a driver with no approved vehicles shouldn't see any trips.
+    const driverVehicles = Array.isArray(driver.driver?.vehicleTypes)
+      ? driver.driver.vehicleTypes
+      : [];
+    const vehicleFilter = { vehicleType: { $in: driverVehicles } };
 
     // ── Stats queries (parallel) ──────────────────────────────────────────────
     const availableFilter = {
       status: 'Pending',
       assignedDriver: null,
       ...membershipFilter,
+      ...regionFilter,
+      ...vehicleFilter,
     };
 
     const myTripsFilter = {

@@ -13,6 +13,12 @@ const userSchema = new mongoose.Schema(
     resetPasswordExpires: { type: Date, default: null },
     avatar: { type: String, default: null },
 
+    // SMS preferences.
+    // smsOptIn: transactional SMS (booking lifecycle alerts). Default true — required for service.
+    // smsPromoOptIn: marketing SMS (promos, re-engagement). Default false — requires explicit opt-in.
+    smsOptIn: { type: Boolean, default: true },
+    smsPromoOptIn: { type: Boolean, default: false },
+
     // Role to differentiate between Admin, Driver, Customer
     role: {
       type: String,
@@ -69,9 +75,20 @@ const userSchema = new mongoose.Schema(
         },
       ],
 
+      /**
+       * Regions this driver serves. Empty array + serveAllRegions=true means
+       * the driver is available in every currently-active region (default-open).
+       * Setting serveAllRegions=false and providing a non-empty list restricts
+       * the driver to only those regions.
+       */
+      regions: [
+        { type: mongoose.Schema.Types.ObjectId, ref: "Region" },
+      ],
+      serveAllRegions: { type: Boolean, default: true },
+
       licenseNumber: { type: String, default: null },   // e.g. DL-2024-001
       licenseExpiry: { type: Date, default: null },      // expiry date of driver's license
-      ssn: { type: String },
+      ssn: { type: String, select: false },
       licenseImage: { type: String, default: null },
       vehicleImage: { type: String, default: null },
       forHireLicenseImage: { type: String, default: null },

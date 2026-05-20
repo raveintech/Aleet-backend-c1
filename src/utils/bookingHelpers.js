@@ -48,14 +48,20 @@ function assertIsoUtc(label, value) {
 // Input validation
 // ---------------------------------------------------------------------------
 
+// Non-members must give at least this much notice before pickup.
+// Members are exempt per spec ("Members = no minimums").
+const NON_MEMBER_NOTICE_MS = 3 * 60 * 60 * 1000;
+
 /**
  * Basic booking validation — called by both previewBooking and startBooking.
  * Does NOT require pickupLocation / dropoffLocation (to support preview-only calls).
  *
+ * @param {boolean} [opts.isSubscriber=false]  When true, skips the 3-hour notice rule.
+ *   Defaults to false so a caller that forgets to pass it gets the stricter (safer) check.
  * @returns {{ bookingHours: number, bookingDays: number }}
  * @throws {Error} on any validation failure
  */
-function validateBookingInput({ region, startDate, endDate, quantity, bookingMode = 'multi_day', durationHours }) {
+function validateBookingInput({ region, startDate, endDate, quantity, bookingMode = 'multi_day', durationHours, isSubscriber = false }) {
     assertIsoUtc('startDate', startDate);
     assertIsoUtc('endDate', endDate);
 
@@ -66,6 +72,15 @@ function validateBookingInput({ region, startDate, endDate, quantity, bookingMod
     const end = new Date(endDate);
 
     if (start < now) throw new Error('Start date must be in future');
+
+    // 3-hour notice rule (non-members only).
+    // Keep this AFTER the past-time check so the error message is the most specific.
+    if (!isSubscriber) {
+        const earliestPickup = new Date(now.getTime() + NON_MEMBER_NOTICE_MS);
+        if (start < earliestPickup) {
+            throw new Error('Earliest pickup is 3 hours from now');
+        }
+    }
 
     const bookingHours = (end - start) / (1000 * 3600);
     const bookingDays = (end - start) / (1000 * 3600 * 24);

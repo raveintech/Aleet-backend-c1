@@ -94,43 +94,114 @@ const sendOTP = async (phoneNumber, otpCode) => {
 };
 
 /**
- * Send a welcome SMS after successful registration
- * @param {string} phoneNumber - The recipient's phone number
- * @param {string} userName - The user's name
- * @returns {Promise<Object>} - Twilio message response
+ * Internal: send an SMS through Twilio.
+ * Used by all non-OTP helpers (welcome, trip alerts, promos).
+ * Returns { success, ... } and never throws — callers fire-and-forget.
  */
-const sendWelcomeSMS = async (phoneNumber, userName) => {
+const sendSMS = async (phoneNumber, body) => {
   try {
-    let formattedPhone = phoneNumber;
-    if (!phoneNumber.startsWith('+')) {
-      formattedPhone = '+' + phoneNumber;
+    let formattedPhone = String(phoneNumber || '').trim();
+    if (!formattedPhone) {
+      return { success: false, error: 'Missing phone number' };
+    }
+    if (!formattedPhone.startsWith('+')) {
+      formattedPhone = '+' + formattedPhone;
     }
 
-    const message = await client.messages.create({
-      body: `Welcome to Swift Haven, ${userName}! Your account has been created successfully. You can now book rides and enjoy our services.`,
-      messagingServiceSid: messagingServiceSid,
-      to: formattedPhone,
-    });
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DEV] SMS skipped. Would send to ${formattedPhone}: ${body}`);
+      return { success: true, sid: 'dev-mock', phoneNumber: formattedPhone };
+    }
 
-    console.log(`Welcome SMS sent successfully to ${formattedPhone}. Message SID: ${message.sid}`);
+    const messagePayload = { body, to: formattedPhone };
+    if (messagingServiceSid) {
+      messagePayload.messagingServiceSid = messagingServiceSid;
+    } else if (fromPhoneNumber) {
+      messagePayload.from = fromPhoneNumber;
+    } else {
+      return { success: false, error: 'Missing TWILIO_MESSAGING_SERVICE_SID or TWILIO_PHONE_NUMBER' };
+    }
 
-    return {
-      success: true,
-      messageSid: message.sid,
-      phoneNumber: formattedPhone
-    };
+    const message = await getClient().messages.create(messagePayload);
+    return { success: true, messageSid: message.sid, phoneNumber: formattedPhone };
   } catch (error) {
-    console.error('Twilio Welcome SMS Error:', error);
-    // Don't throw error for welcome SMS as it's not critical
-    return {
-      success: false,
-      error: error.message
-    };
+    console.error('Twilio SMS Error:', error?.message || error);
+    return { success: false, error: error?.message || 'Unknown SMS error' };
   }
+};
+
+/**
+ * Send a welcome SMS after successful registration.
+ */
+const sendWelcomeSMS = async (phoneNumber, userName) => {
+  const name = userName ? `, ${userName}` : '';
+  return sendSMS(
+    phoneNumber,
+    `Welcome to Aleet${name}! Your account is ready. Book your private driver any time at aleet.com.`
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Trip-alert templates
+// Keep messages short — every SMS segment past 160 chars costs extra.
+// ---------------------------------------------------------------------------
+const formatTripTime = (date) => {
+  if (!date) return '';
+  try {
+    return new Date(date).toLocaleString('en-US', {
+      month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit',
+      timeZone: 'America/New_York'
+    });
+  } catch (_e) {
+    return '';
+  }
+};
+
+const tripAlertTemplates = {
+  guest_booking_received: ({ when }) =>
+    `Aleet: Booking received${when ? ` for ${when}` : ''}. We're matching you with a driver — you'll be notified once assigned.`,
+
+  guest_driver_assigned: ({ driverName, when }) =>
+    `Aleet: ${driverName || 'Your driver'} has been assigned to your trip${when ? ` on ${when}` : ''}. Track details in the app.`,
+
+  guest_trip_completed: () =>
+    `Aleet: Your trip is complete. Thank you for riding with us — please rate your driver in the app.`,
+
+  guest_trip_cancelled: () =>
+    `Aleet: Your trip has been cancelled. We're sorry for the inconvenience — please rebook or contact support.`,
+
+  driver_new_assignment: ({ when, pickup }) =>
+    `Aleet: New trip assigned${when ? ` for ${when}` : ''}${pickup ? ` from ${pickup}` : ''}. Open the driver app to view details.`,
+};
+
+/**
+ * Send a trip-alert SMS to a user.
+ * Respects user.smsOptIn (transactional opt-out). Fire-and-forget — never throws.
+ *
+ * @param {Object} user - User document (must have phone + smsOptIn)
+ * @param {string} templateKey - Key from tripAlertTemplates
+ * @param {Object} vars - Template variables
+ */
+const sendTripAlert = async (user, templateKey, vars = {}) => {
+  if (!user) return { success: false, error: 'Missing user' };
+  if (user.smsOptIn === false) {
+    return { success: false, skipped: true, reason: 'user opted out' };
+  }
+
+  const template = tripAlertTemplates[templateKey];
+  if (!template) {
+    console.error(`Twilio: unknown trip-alert template "${templateKey}"`);
+    return { success: false, error: `Unknown template ${templateKey}` };
+  }
+
+  return sendSMS(user.phone, template(vars));
 };
 
 module.exports = {
   generateOTP,
   sendOTP,
-  sendWelcomeSMS
+  sendWelcomeSMS,
+  sendTripAlert,
+  formatTripTime,
 };

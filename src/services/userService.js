@@ -191,6 +191,8 @@ const formatUser = (user) => {
         sLevel: d.sLevel,
         pro: d.pro,
         diamond: d.diamond,
+        regions: Array.isArray(d.regions) ? d.regions : [],
+        serveAllRegions: d.serveAllRegions !== false,
         checkr: d.checkr
           ? {
             status: d.checkr.status,
