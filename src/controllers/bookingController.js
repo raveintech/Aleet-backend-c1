@@ -29,7 +29,7 @@ const {
 } = require('../utils/responseHelper');
 const { computePayoutCents } = require('../services/payoutUtils');
 const { getMilesFromBase } = require('../services/googleRoutesService');
-const { sendTripAlertSMS } = require('../services/twilioService');
+const { sendTripAlertSMS, sendTripAlert, formatTripTime } = require('../services/twilioService');
 const {
   toId,
   validateBookingInput,
