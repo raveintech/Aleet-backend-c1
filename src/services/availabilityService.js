@@ -43,7 +43,7 @@ function qualifiedDriverFilter(regionId) {
 /**
  * Compute the same-day availability breakdown for a region document.
  * @param {object} region  A Region mongoose doc (or lean object).
- * @returns {Promise<{aqd,rb,cl,mct,formulaPass,manualBlock,available}>}
+ * @returns {Promise<{aqd,rb,cl,mct,formulaPass,manualBlock,available,reason,message}>}
  */
 async function computeSameDayStatus(region) {
   const regionId = region._id;
@@ -66,9 +66,27 @@ async function computeSameDayStatus(region) {
   const mct = MCT;
   const formulaPass = aqd - rb - cl >= mct;
   const manualBlock = region.sameDayManualBlock === true;
-  const available = region.isActive !== false && !manualBlock && formulaPass;
+  const regionInactive = region.isActive === false;
+  const available = !regionInactive && !manualBlock && formulaPass;
 
-  return { aqd, rb, cl, mct, formulaPass, manualBlock, available };
+  // Guest-facing eligibility messaging — a reason code the frontend can map to
+  // styled UI, plus a ready-to-show human-readable message.
+  let reason = null;
+  let message = 'Same-day booking is available for this region.';
+  if (regionInactive) {
+    reason = 'region_inactive';
+    message = 'This region is not currently available for bookings.';
+  } else if (manualBlock) {
+    reason = 'manual_block';
+    message = 'Same-day booking has been temporarily turned off for this region.';
+  } else if (!formulaPass) {
+    reason = 'insufficient_coverage';
+    message =
+      'Same-day booking is unavailable right now — not enough drivers are free ' +
+      'in this region. Please choose a later pickup time.';
+  }
+
+  return { aqd, rb, cl, mct, formulaPass, manualBlock, available, reason, message };
 }
 
 /** Same-day status for one region by id. Returns null if the region is gone. */

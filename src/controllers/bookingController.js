@@ -334,7 +334,20 @@ const startBooking = asyncHandler(async (req, res) => {
       if (sameDayStatus && !sameDayStatus.available) {
         return sendValidationError(
           res,
-          'Same-day booking is currently unavailable for this region. Please choose a later pickup time.',
+          sameDayStatus.message ||
+            'Same-day booking is currently unavailable for this region. Please choose a later pickup time.',
+          {
+            eligibility: {
+              eligible: false,
+              reason: sameDayStatus.reason || 'same_day_unavailable',
+              sameDay: {
+                aqd: sameDayStatus.aqd,
+                rb: sameDayStatus.rb,
+                cl: sameDayStatus.cl,
+                mct: sameDayStatus.mct,
+              },
+            },
+          },
         );
       }
     }

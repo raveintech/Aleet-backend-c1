@@ -1,10 +1,11 @@
 const Booking = require('../models/Booking');
 const User = require('../models/User');
 const mongoose = require('mongoose');
-const { sendSuccess, sendError, sendValidationError, sendNotFound, sendForbidden } = require('../utils/responseHelper');
+const { sendSuccess, sendError, sendValidationError, sendNotFound, sendForbidden, sendConflict } = require('../utils/responseHelper');
 const { fileUrl } = require('../utils/multer');
 const { resolveDriverTier } = require('../services/driverTierService');
-const { evaluateDriver, getRankedDriversForBooking } = require('../services/dispatchService');
+const { evaluateDriver, getRankedDriversForBooking, autoAssignDriver } = require('../services/dispatchService');
+const { sendTripAlert, formatTripTime } = require('../services/twilioService');
 
 
 const assignDriverToBooking = async (req, res) => {
@@ -63,6 +64,72 @@ const getEligibleDriversForBooking = async (req, res) => {
     return sendError(res, 500, error.message || 'Failed to retrieve eligible drivers');
   }
 };
+// POST /api/admin/bookings/:id/auto-assign
+// Auto-dispatch — assigns the single best eligible driver (tier priority, then
+// rating) and confirms the booking. Returns 409 when no driver is eligible.
+const autoAssignDriverToBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const booking = await Booking.findById(id);
+    if (!booking) return sendNotFound(res, 'Booking not found');
+
+    if (['Cancelled', 'Completed', 'Expired'].includes(booking.status)) {
+      return sendValidationError(res, `Cannot auto-assign a driver to a ${booking.status.toLowerCase()} booking`);
+    }
+    if (booking.assignedDriver) {
+      return sendValidationError(res, 'Booking already has an assigned driver');
+    }
+
+    const { driver, sameDay, membershipTrip, candidates } = await autoAssignDriver(booking);
+    if (!driver) {
+      return sendConflict(
+        res,
+        candidates.length
+          ? `No eligible driver available — all ${candidates.length} driver(s) were ruled out by tier, vehicle, or region rules.`
+          : 'No drivers exist to dispatch.',
+      );
+    }
+
+    booking.assignedDriver = driver._id;
+    booking.status = 'Confirmed';
+    await booking.save();
+
+    // Trip-alert SMS — notify guest + driver (fire-and-forget, never throws)
+    (async () => {
+      try {
+        const [guest, driverDoc] = await Promise.all([
+          User.findById(booking.user),
+          User.findById(driver._id),
+        ]);
+        const when = formatTripTime(booking.dates?.startDate);
+        if (guest) {
+          sendTripAlert(guest, 'guest_driver_assigned', { driverName: driver.name, when });
+        }
+        if (driverDoc) {
+          sendTripAlert(driverDoc, 'driver_new_assignment', { when, pickup: booking.pickupLocation });
+        }
+      } catch (e) {
+        console.error('Auto-assign trip-alert SMS failed:', e?.message || e);
+      }
+    })();
+
+    return sendSuccess(res, 200, 'Driver auto-assigned successfully', {
+      booking,
+      assignedDriver: {
+        _id: driver._id,
+        name: driver.name,
+        tier: driver.tier,
+        rating: driver.rating,
+        selectPro: driver.selectPro,
+      },
+      dispatch: { sameDay, membershipTrip },
+    });
+  } catch (error) {
+    console.error('Auto-Assign Driver Error:', error);
+    return sendError(res, 500, error.message || 'Failed to auto-assign driver');
+  }
+};
+
 // Admin function to activate/deactivate a driver
 const toggleDriverStatus = async (req, res) => {
   try {
@@ -536,4 +603,4 @@ const getAdminDashboard = async (req, res) => {
   }
 };
 
-module.exports = { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard };
+module.exports = { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, autoAssignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard };
