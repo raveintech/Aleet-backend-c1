@@ -2,6 +2,7 @@ const express = require('express');
 const {
     getRegions,
     getAllRegions,
+    getSameDayStatus,
     addRegion,
     updateRegion,
     deleteRegion,
@@ -12,6 +13,9 @@ const router = express.Router();
 
 // Public — used by booking wizard to populate region dropdown
 router.get('/', getRegions);
+
+// Public — live same-day availability for a region (used by the booking flow)
+router.get('/:id/same-day-status', getSameDayStatus);
 
 // Admin only
 router.get('/all', authenticateJWT, getAllRegions);

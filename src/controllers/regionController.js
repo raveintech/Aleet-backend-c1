@@ -6,6 +6,7 @@ const {
     sendNotFound,
     sendConflict,
 } = require('../utils/responseHelper');
+const { computeSameDayStatus } = require('../services/availabilityService');
 
 // ─── Public ──────────────────────────────────────────────────────────────────
 
@@ -23,13 +24,37 @@ const getRegions = async (req, res) => {
 // ─── Admin ────────────────────────────────────────────────────────────────────
 
 // GET /api/regions/all — all regions including inactive (admin)
+// Each region is enriched with its live same-day availability breakdown.
 const getAllRegions = async (req, res) => {
     try {
         const regions = await Region.find().sort('name');
-        return sendSuccess(res, 200, 'All regions retrieved successfully', regions);
+        const enriched = await Promise.all(
+            regions.map(async (region) => ({
+                ...region.toObject(),
+                sameDay: await computeSameDayStatus(region),
+            })),
+        );
+        return sendSuccess(res, 200, 'All regions retrieved successfully', enriched);
     } catch (error) {
         console.error('Get All Regions Error:', error);
         return sendError(res, 500, error.message || 'Failed to retrieve regions');
+    }
+};
+
+// GET /api/regions/:id/same-day-status — public; live same-day availability.
+const getSameDayStatus = async (req, res) => {
+    try {
+        const region = await Region.findById(req.params.id);
+        if (!region) return sendNotFound(res, 'Region not found');
+
+        const status = await computeSameDayStatus(region);
+        return sendSuccess(res, 200, 'Same-day status retrieved', {
+            regionId: region._id,
+            ...status,
+        });
+    } catch (error) {
+        console.error('Get Same-Day Status Error:', error);
+        return sendError(res, 500, error.message || 'Failed to retrieve same-day status');
     }
 };
 
@@ -62,11 +87,11 @@ const addRegion = async (req, res) => {
     }
 };
 
-// PUT /api/regions/:id — update name/code/isActive (admin)
+// PUT /api/regions/:id — update name/code/isActive/sameDayManualBlock (admin)
 const updateRegion = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, code, isActive } = req.body;
+        const { name, code, isActive, sameDayManualBlock } = req.body;
 
         const region = await Region.findById(id);
         if (!region) return sendNotFound(res, 'Region not found');
@@ -74,9 +99,14 @@ const updateRegion = async (req, res) => {
         if (name !== undefined) region.name = name.trim();
         if (code !== undefined) region.code = code.trim().toUpperCase();
         if (isActive !== undefined) region.isActive = Boolean(isActive);
+        if (sameDayManualBlock !== undefined) region.sameDayManualBlock = Boolean(sameDayManualBlock);
 
         await region.save();
-        return sendSuccess(res, 200, 'Region updated successfully', region);
+        const sameDay = await computeSameDayStatus(region);
+        return sendSuccess(res, 200, 'Region updated successfully', {
+            ...region.toObject(),
+            sameDay,
+        });
     } catch (error) {
         console.error('Update Region Error:', error);
         return sendError(res, 500, error.message || 'Failed to update region');
@@ -102,6 +132,7 @@ const deleteRegion = async (req, res) => {
 module.exports = {
     getRegions,
     getAllRegions,
+    getSameDayStatus,
     addRegion,
     updateRegion,
     deleteRegion,
