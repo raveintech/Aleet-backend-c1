@@ -89,8 +89,11 @@ function validateBookingInput({ region, startDate, endDate, quantity, bookingMod
         if (!Number.isFinite(Number(durationHours)) || Number(durationHours) <= 0) {
             throw new Error('Duration must be a positive number of hours');
         }
-    } else if (!isSubscriber) {
-        // Members are exempt from min/max duration limits ("Members = no minimums").
+    }
+
+    // Min 3h / max 7d apply to BOTH booking modes (buy_hours no longer bypasses
+    // them). Members are exempt — "Members = no minimums".
+    if (!isSubscriber) {
         if (bookingHours < 3) throw new Error('Minimum booking is 3 hours');
         if (bookingDays > 7) throw new Error('Maximum booking is 7 days');
     }
