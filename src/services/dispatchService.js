@@ -5,6 +5,7 @@
 // Used by the admin "assign driver" flow:
 //   - getRankedDriversForBooking → powers the eligible-driver picker
 //   - evaluateDriver             → the gate enforced when an admin assigns
+//   - autoAssignDriver           → picks the single best eligible driver
 // ---------------------------------------------------------------------------
 
 const User = require('../models/User');
@@ -68,15 +69,31 @@ function evaluateDriver(driverDoc, booking) {
   return { eligible: true, reason: null };
 }
 
+// Rating at/above this promotes a Pro driver to "Select Pro" — same-day
+// priority just below Diamond (spec: same-day = Diamond, then Select Pro).
+// Soft signal only: lower-rated Pro drivers stay eligible, just ranked later.
+const SELECT_PRO_MIN_RATING = 4.5;
+
+/** True when a Pro driver's rating qualifies them as a "Select Pro". */
+function isSelectPro(tier, rating) {
+  return tier === 'Pro' && Number(rating || 0) >= SELECT_PRO_MIN_RATING;
+}
+
 // Tier priority — lower number = higher priority.
-// Same-day: Diamond first, then Pro, then S-Level.
-// Advance:  S-Level first, then Pro / Diamond.
-const SAME_DAY_PRIORITY = { Diamond: 0, Pro: 1, 'S-Level': 2 };
+// Same-day: Diamond → Select Pro → other Pro → S-Level.
+// Advance:  S-Level → Pro / Diamond.
 const ADVANCE_PRIORITY = { 'S-Level': 0, Pro: 1, Diamond: 1 };
 
-function tierRank(tier, sameDay) {
-  const map = sameDay ? SAME_DAY_PRIORITY : ADVANCE_PRIORITY;
-  return map[tier] != null ? map[tier] : 99;
+function sameDayRank(tier, rating) {
+  if (tier === 'Diamond') return 0;
+  if (tier === 'Pro') return isSelectPro(tier, rating) ? 1 : 2;
+  if (tier === 'S-Level') return 3;
+  return 99;
+}
+
+function tierRank(tier, rating, sameDay) {
+  if (sameDay) return sameDayRank(tier, rating);
+  return ADVANCE_PRIORITY[tier] != null ? ADVANCE_PRIORITY[tier] : 99;
 }
 
 /**
@@ -97,13 +114,16 @@ async function getRankedDriversForBooking(booking) {
   const evaluated = drivers.map((driver) => {
     const { eligible, reason } = evaluateDriver(driver, booking);
     const d = driver.driver || {};
+    const tier = d.tier || null;
+    const rating = d.driverRating || 0;
     return {
       _id: driver._id,
       name: driver.name,
       email: driver.email,
       phone: driver.phone,
-      tier: d.tier || null,
-      rating: d.driverRating || 0,
+      tier,
+      rating,
+      selectPro: isSelectPro(tier, rating),
       eligible,
       reason,
     };
@@ -111,7 +131,8 @@ async function getRankedDriversForBooking(booking) {
 
   evaluated.sort((a, b) => {
     if (a.eligible !== b.eligible) return a.eligible ? -1 : 1; // eligible first
-    const rankDiff = tierRank(a.tier, sameDay) - tierRank(b.tier, sameDay);
+    const rankDiff =
+      tierRank(a.tier, a.rating, sameDay) - tierRank(b.tier, b.rating, sameDay);
     if (rankDiff !== 0) return rankDiff;                       // tier priority
     return b.rating - a.rating;                               // higher rating first
   });
@@ -123,9 +144,30 @@ async function getRankedDriversForBooking(booking) {
   };
 }
 
+/**
+ * Auto-dispatch — pick the single best driver for a booking. The chosen driver
+ * is the top-ranked eligible driver from getRankedDriversForBooking (tier
+ * priority, then rating). Returns null when no driver is eligible.
+ *
+ * Scheduling conflicts are intentionally NOT considered — a driver may already
+ * hold an overlapping trip; the admin resolves any clash.
+ *
+ * @param {object} booking  A Booking doc (or lean object).
+ * @returns {Promise<{ driver: object|null, sameDay: boolean,
+ *                      membershipTrip: boolean, candidates: object[] }>}
+ */
+async function autoAssignDriver(booking) {
+  const { drivers, sameDay, membershipTrip } = await getRankedDriversForBooking(booking);
+  const driver = drivers.find((d) => d.eligible) || null;
+  return { driver, sameDay, membershipTrip, candidates: drivers };
+}
+
 module.exports = {
   evaluateDriver,
   getRankedDriversForBooking,
+  autoAssignDriver,
   isSameDayBooking,
   isMembershipTrip,
+  isSelectPro,
+  SELECT_PRO_MIN_RATING,
 };
