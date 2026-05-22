@@ -1,9 +1,10 @@
 const Booking = require('../models/Booking');
 const User = require('../models/User');
 const mongoose = require('mongoose');
-const { sendSuccess, sendError, sendValidationError, sendNotFound } = require('../utils/responseHelper');
+const { sendSuccess, sendError, sendValidationError, sendNotFound, sendForbidden } = require('../utils/responseHelper');
 const { fileUrl } = require('../utils/multer');
 const { resolveDriverTier } = require('../services/driverTierService');
+const { evaluateDriver, getRankedDriversForBooking } = require('../services/dispatchService');
 
 
 const assignDriverToBooking = async (req, res) => {
@@ -18,10 +19,20 @@ const assignDriverToBooking = async (req, res) => {
     const booking = await Booking.findById(bookingId);
     if (!booking) return sendNotFound(res, 'Booking not found');
 
+    if (['Cancelled', 'Completed', 'Expired'].includes(booking.status)) {
+      return sendValidationError(res, `Cannot assign a driver to a ${booking.status.toLowerCase()} booking`);
+    }
+
     // Find the driver by ID
     const driver = await User.findById(driverId);
     if (!driver || driver.role !== 'driver') {
       return sendValidationError(res, 'Invalid driver');
+    }
+
+    // Dispatch eligibility — tier / membership / vehicle / region gates
+    const { eligible, reason } = evaluateDriver(driver, booking);
+    if (!eligible) {
+      return sendForbidden(res, reason || 'Driver is not eligible for this booking');
     }
 
     // Assign driver to the booking
@@ -33,6 +44,23 @@ const assignDriverToBooking = async (req, res) => {
   } catch (error) {
     console.error('Assign Driver Error:', error);
     return sendError(res, 500, error.message || 'Failed to assign driver');
+  }
+};
+
+// GET /api/admin/bookings/:id/eligible-drivers
+// Returns all drivers ranked for a booking — eligible first (tier priority,
+// then rating), ineligible drivers follow with a reason.
+const getEligibleDriversForBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const booking = await Booking.findById(id);
+    if (!booking) return sendNotFound(res, 'Booking not found');
+
+    const result = await getRankedDriversForBooking(booking);
+    return sendSuccess(res, 200, 'Eligible drivers retrieved', result);
+  } catch (error) {
+    console.error('Get Eligible Drivers Error:', error);
+    return sendError(res, 500, error.message || 'Failed to retrieve eligible drivers');
   }
 };
 // Admin function to activate/deactivate a driver
@@ -508,4 +536,4 @@ const getAdminDashboard = async (req, res) => {
   }
 };
 
-module.exports = { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard };
+module.exports = { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard };

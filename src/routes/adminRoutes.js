@@ -1,5 +1,5 @@
 const express = require('express');
-const { toggleDriverStatus, assignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard } = require('../controllers/adminController');
+const { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard } = require('../controllers/adminController');
 const { getDriverTierPerformance, getTierSettings, updateTierSettings } = require('../controllers/tierController');
 const authenticateJWT = require('../middleware/authMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
@@ -10,6 +10,7 @@ const router = express.Router();
 // Driver status & assignment
 router.patch('/toggleDriverStatus', requireAdmin, requirePermission('manage-users'), toggleDriverStatus);
 router.patch('/assignDriver', requireAdmin, requirePermission('manage-bookings'), assignDriverToBooking);
+router.get('/bookings/:id/eligible-drivers', requireAdmin, requirePermission('manage-bookings'), getEligibleDriversForBooking);
 
 // Driver listing & licensing
 router.get('/drivers', requireAdmin, requirePermission('manage-users'), getAllDrivers);
