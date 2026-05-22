@@ -29,6 +29,7 @@ const {
 } = require('../utils/responseHelper');
 const { computePayoutCents } = require('../services/payoutUtils');
 const { getMilesFromBase } = require('../services/googleRoutesService');
+const { getRegionSameDayStatus } = require('../services/availabilityService');
 const { sendTripAlertSMS, sendTripAlert, formatTripTime } = require('../services/twilioService');
 const {
   toId,
@@ -321,6 +322,22 @@ const startBooking = asyncHandler(async (req, res) => {
       freeRouting: effectiveFreeRouting,
       bookingMode: resolvedBookingMode
     });
+
+    // Same-day availability gate — a guest cannot book a same-day trip in a
+    // region where same-day is OFF (AQD-RB-CL formula fails or admin-blocked).
+    // Admin-created trips bypass availability logic entirely.
+    const isAdminBooker = ['admin', 'staff'].includes(req.user.role);
+    const sameDayBooking =
+      new Date(effectiveStartDate).getTime() - Date.now() <= 24 * 60 * 60 * 1000;
+    if (!isAdminBooker && sameDayBooking) {
+      const sameDayStatus = await getRegionSameDayStatus(region);
+      if (sameDayStatus && !sameDayStatus.available) {
+        return sendValidationError(
+          res,
+          'Same-day booking is currently unavailable for this region. Please choose a later pickup time.',
+        );
+      }
+    }
 
     const safeAddOnIds = Array.isArray(addOns) ? addOns.map(toId).filter(Boolean) : [];
     const safeStops = Array.isArray(inputStops)
