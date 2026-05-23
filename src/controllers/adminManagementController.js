@@ -7,6 +7,7 @@ const {
     sendConflict,
     sendPaginated,
 } = require('../utils/responseHelper');
+const logger = require('../utils/logger');
 
 // ── GET /api/admin/admins ─────────────────────────────────────────────────────
 const getAllAdmins = async (req, res) => {
@@ -18,7 +19,7 @@ const getAllAdmins = async (req, res) => {
 
         return sendPaginated(res, 'Admins retrieved successfully', admins, pagination);
     } catch (error) {
-        console.error('getAllAdmins error:', error);
+        (req.log || logger).error({ err: error }, 'getAllAdmins error');
         return sendError(res, error.statusCode || 500, error.message);
     }
 };
@@ -29,7 +30,7 @@ const getAdminById = async (req, res) => {
         const admin = await AdminService.getAdminById(req.params.id);
         return sendSuccess(res, 200, 'Admin retrieved successfully', admin);
     } catch (error) {
-        console.error('getAdminById error:', error);
+        (req.log || logger).error({ err: error }, 'getAdminById error');
         if (error.statusCode === 404) return sendNotFound(res, error.message);
         return sendError(res, error.statusCode || 500, error.message);
     }
@@ -42,7 +43,7 @@ const createAdmin = async (req, res) => {
         const admin = await AdminService.createAdmin({ name, email, phone, password, permissions });
         return sendSuccess(res, 201, 'Admin created successfully', admin);
     } catch (error) {
-        console.error('createAdmin error:', error);
+        (req.log || logger).error({ err: error }, 'createAdmin error');
         if (error.statusCode === 400) return sendValidationError(res, error.message);
         if (error.statusCode === 409) return sendConflict(res, error.message);
         return sendError(res, error.statusCode || 500, error.message);
@@ -63,7 +64,7 @@ const updateAdmin = async (req, res) => {
         });
         return sendSuccess(res, 200, 'Admin updated successfully', admin);
     } catch (error) {
-        console.error('updateAdmin error:', error);
+        (req.log || logger).error({ err: error }, 'updateAdmin error');
         if (error.statusCode === 404) return sendNotFound(res, error.message);
         if (error.statusCode === 400) return sendValidationError(res, error.message);
         if (error.statusCode === 409) return sendConflict(res, error.message);
@@ -78,7 +79,7 @@ const deleteAdmin = async (req, res) => {
         const result = await AdminService.deleteAdmin(req.params.id, requesterId);
         return sendSuccess(res, 200, 'Admin deleted successfully', result);
     } catch (error) {
-        console.error('deleteAdmin error:', error);
+        (req.log || logger).error({ err: error }, 'deleteAdmin error');
         if (error.statusCode === 404) return sendNotFound(res, error.message);
         if (error.statusCode === 400) return sendValidationError(res, error.message);
         return sendError(res, error.statusCode || 500, error.message);

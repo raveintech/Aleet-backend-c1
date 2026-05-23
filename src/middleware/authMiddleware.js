@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const logger = require('../utils/logger');
 
 // Middleware to authenticate JWT token
 const authenticateJWT = async (req, res, next) => {
@@ -17,7 +18,7 @@ const authenticateJWT = async (req, res, next) => {
 
     next();  // Proceed to the next middleware or route handler
   } catch (err) {
-    console.error(err);
+    logger.error({ err }, 'JWT verification failed');
     res.status(401).json({ msg: 'Token is not valid' });
   }
 };
@@ -45,7 +46,7 @@ const requireActiveDriver = async (req, res, next) => {
 
     next();
   } catch (err) {
-    console.error(err);
+    logger.error({ err }, 'requireActiveDriver server error');
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };

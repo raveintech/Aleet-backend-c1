@@ -6,6 +6,8 @@ const User = require('../models/User');
 const Booking = require('../models/Booking');
 const TierSettings = require('../models/TierSettings');
 const { sendSuccess, sendError, sendValidationError } = require('../utils/responseHelper');
+const { recordAudit } = require('../services/auditLogService');
+const logger = require('../utils/logger');
 
 const VALID_TIERS = ['S-Level', 'Pro', 'Diamond'];
 
@@ -108,7 +110,7 @@ const getDriverTierPerformance = asyncHandler(async (req, res) => {
             pages: Math.ceil(total / limitNum)
         });
     } catch (error) {
-        console.error('Get Driver Tier Performance Error:', error);
+        (req.log || logger).error({ err: error }, 'Get Driver Tier Performance Error');
         return sendError(res, 500, error.message || 'Failed to retrieve tier performance');
     }
 });
@@ -122,7 +124,7 @@ const getTierSettings = asyncHandler(async (req, res) => {
         const settings = await getOrCreateSettings();
         return sendSuccess(res, 200, 'Tier settings retrieved', settings);
     } catch (error) {
-        console.error('Get Tier Settings Error:', error);
+        (req.log || logger).error({ err: error }, 'Get Tier Settings Error');
         return sendError(res, 500, error.message || 'Failed to retrieve tier settings');
     }
 });
@@ -136,6 +138,7 @@ const updateTierSettings = asyncHandler(async (req, res) => {
     try {
         const { bookingFee, tiers } = req.body;
         const settings = await getOrCreateSettings();
+        const before = settings.toObject();
 
         if (bookingFee !== undefined) {
             if (typeof bookingFee !== 'number' || bookingFee < 0) {
@@ -171,9 +174,19 @@ const updateTierSettings = asyncHandler(async (req, res) => {
         settings.markModified('tiers');
         await settings.save();
 
+        await recordAudit({
+            req,
+            category: 'config',
+            action: 'tier_settings.update',
+            targetType: 'TierSettings',
+            targetId: settings._id,
+            before,
+            after: settings.toObject(),
+        });
+
         return sendSuccess(res, 200, 'Tier settings updated', settings);
     } catch (error) {
-        console.error('Update Tier Settings Error:', error);
+        (req.log || logger).error({ err: error }, 'Update Tier Settings Error');
         return sendError(res, 500, error.message || 'Failed to update tier settings');
     }
 });

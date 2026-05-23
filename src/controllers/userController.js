@@ -16,6 +16,7 @@ const {
   sendNotFound,
   sendUnauthorized,
 } = require('../utils/responseHelper');
+const logger = require('../utils/logger');
 
 // -------------------- REGISTER (UPDATED) --------------------
 const registerUser = asyncHandler(async (req, res) => {
@@ -24,7 +25,7 @@ const registerUser = asyncHandler(async (req, res) => {
 
     return sendSuccess(res, 201, 'User registered successfully', user);
   } catch (error) {
-    console.error('Registration Error:', error);
+    (req.log || logger).error({ err: error }, 'Registration Error');
     return sendError(
       res,
       error.statusCode || 500,
@@ -39,7 +40,7 @@ const signupStart = asyncHandler(async (req, res) => {
     const data = await AuthService.startSignup({ identifier, name, role });
     return sendSuccess(res, 200, 'Verification code sent successfully', data);
   } catch (error) {
-    console.error('Signup Start Error:', error);
+    (req.log || logger).error({ err: error }, 'Signup Start Error');
     return sendError(res, error.statusCode || 500, error.message || 'Failed to start signup');
   }
 });
@@ -50,7 +51,7 @@ const signupVerify = asyncHandler(async (req, res) => {
     const data = await AuthService.verifySignupOtp({ identifier, code });
     return sendSuccess(res, 200, 'Code verified successfully', data);
   } catch (error) {
-    console.error('Signup Verify Error:', error);
+    (req.log || logger).error({ err: error }, 'Signup Verify Error');
     return sendError(res, error.statusCode || 500, error.message || 'Failed to verify code');
   }
 });
@@ -62,7 +63,7 @@ const signupPasscode = asyncHandler(async (req, res) => {
     const data = await AuthService.setPasscode({ signupToken, password });
     return sendSuccess(res, 200, 'Passcode set successfully', data);
   } catch (error) {
-    console.error('Signup Passcode Error:', error);
+    (req.log || logger).error({ err: error }, 'Signup Passcode Error');
     return sendError(res, error.statusCode || 500, error.message || 'Failed to set passcode');
   }
 });
@@ -80,7 +81,7 @@ const signupComplete = asyncHandler(async (req, res) => {
     const token = generateToken(user._id, user.role);
     return sendSuccess(res, 201, 'Account created successfully', { token, user });
   } catch (error) {
-    console.error('Signup Complete Error:', error);
+    (req.log || logger).error({ err: error }, 'Signup Complete Error');
     return sendError(res, error.statusCode || 500, error.message || 'Failed to complete signup');
   }
 });
@@ -91,7 +92,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
     const data = await AuthService.forgotPassword({ email, role, resetBaseUrl });
     return sendSuccess(res, 200, data.message);
   } catch (error) {
-    console.error('Forgot Password Error:', error);
+    (req.log || logger).error({ err: error }, 'Forgot Password Error');
     return sendError(res, error.statusCode || 500, error.message || 'Failed to process forgot password');
   }
 });
@@ -102,7 +103,7 @@ const resetPassword = asyncHandler(async (req, res) => {
     const data = await AuthService.resetPassword({ token, password });
     return sendSuccess(res, 200, data.message);
   } catch (error) {
-    console.error('Reset Password Error:', error);
+    (req.log || logger).error({ err: error }, 'Reset Password Error');
     return sendError(res, error.statusCode || 500, error.message || 'Failed to reset password');
   }
 });
@@ -140,7 +141,7 @@ const checkUser = asyncHandler(async (req, res) => {
       type: isEmail ? 'email' : 'phone',
     });
   } catch (error) {
-    console.error('Check User Error:', error);
+    (req.log || logger).error({ err: error }, 'Check User Error');
     return sendError(res, 500, error.message || 'Failed to check user');
   }
 });
@@ -208,7 +209,7 @@ const loginUser = asyncHandler(async (req, res) => {
 
     return sendSuccess(res, 200, 'Login successful', { token, user: userData });
   } catch (error) {
-    console.error('Login Error:', error);
+    (req.log || logger).error({ err: error }, 'Login Error');
     return sendError(res, 500, error.message || 'Login failed');
   }
 });
@@ -237,7 +238,11 @@ const updateDriverProfile = asyncHandler(async (req, res) => {
       const { validateSSN } = require('../utils/ssnValidator');
       const v = validateSSN(ssn);
       if (!v.valid) return sendValidationError(res, v.error);
-      updateData['driver.ssn'] = ssn;
+      // findByIdAndUpdate with $set bypasses Mongoose setters, so the schema-
+      // level encryption hook on `driver.ssn` would NOT fire here. Encrypt
+      // explicitly to keep this write path safe (T-1.1.1).
+      const { encrypt } = require('../services/cryptoService');
+      updateData['driver.ssn'] = encrypt(ssn);
     }
 
     if (vehicleTypes) {
@@ -284,7 +289,7 @@ const updateDriverProfile = asyncHandler(async (req, res) => {
     return sendSuccess(res, 200, 'Driver profile updated successfully', UserService.formatUser(user));
   } catch (error) {
     // Log only message — request body can contain SSN
-    console.error('Update Profile Error:', error?.message || 'unknown error');
+    (req.log || logger).error({ err: error?.message || 'unknown error' }, 'Update Profile Error');
     return sendError(res, 500, error.message || 'Profile update failed');
   }
 });
@@ -296,7 +301,7 @@ const getProfile = asyncHandler(async (req, res) => {
     if (!user) return sendNotFound(res, 'User not found');
     return sendSuccess(res, 200, 'Profile retrieved successfully', UserService.formatUser(user));
   } catch (error) {
-    console.error('Get Profile Error:', error);
+    (req.log || logger).error({ err: error }, 'Get Profile Error');
     return sendError(res, 500, error.message || 'Failed to retrieve profile');
   }
 });
@@ -316,7 +321,7 @@ const submitRevision = asyncHandler(async (req, res) => {
 
     return sendSuccess(res, 200, 'Revision submitted successfully', UserService.formatUser(driver));
   } catch (error) {
-    console.error('Submit Revision Error:', error);
+    (req.log || logger).error({ err: error }, 'Submit Revision Error');
     return sendError(res, 500, error.message || 'Failed to submit revision');
   }
 });
@@ -353,7 +358,7 @@ const updateDriverContactInfo = asyncHandler(async (req, res) => {
 
     return sendSuccess(res, 200, 'Contact info updated successfully', UserService.formatUser(driver));
   } catch (error) {
-    console.error('Update Contact Info Error:', error);
+    (req.log || logger).error({ err: error }, 'Update Contact Info Error');
     return sendError(res, 500, error.message || 'Failed to update contact info');
   }
 });
@@ -381,7 +386,7 @@ const deleteAccount = asyncHandler(async (req, res) => {
 
     return sendSuccess(res, 200, 'Account deleted successfully');
   } catch (error) {
-    console.error('Delete Account Error:', error);
+    (req.log || logger).error({ err: error }, 'Delete Account Error');
     return sendError(res, 500, error.message || 'Failed to delete account');
   }
 });
@@ -413,7 +418,7 @@ const updateMyRegions = asyncHandler(async (req, res) => {
       serveAllRegions: user.driver.serveAllRegions,
     });
   } catch (error) {
-    console.error('Update My Regions Error:', error);
+    (req.log || logger).error({ err: error }, 'Update My Regions Error');
     return sendError(res, 500, error.message || 'Failed to update regions');
   }
 });

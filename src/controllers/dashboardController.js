@@ -11,6 +11,7 @@ const {
   sendError,
   sendNotFound,
 } = require('../utils/responseHelper');
+const logger = require('../utils/logger');
 
 // ===== DASHBOARD STATISTICS ===== //
 
@@ -136,10 +137,29 @@ const getDashboardStats = asyncHandler(async (req, res) => {
       ]);
 
       const hoursUsed = monthlyUsageAgg[0]?.totalHoursUsed || 0;
+      // Source of truth depends on flag rollout: the legacy reader pulls
+      // `monthlyHoursIncluded` from the user's `subscriptionDetails` (written
+      // by both subscriptionController and the Stripe webhook). The
+      // Subscription ledger (T-2.3.4) becomes authoritative once
+      // PRICING_OVERAGE flips on. No `|| 5` fallback — if a subscriber has no
+      // plan record we surface 0, which is correct rather than fail-open.
+      let hoursIncluded = Number(user.subscriptionDetails?.monthlyHoursIncluded || 0);
+      let ledgerHoursUsed = hoursUsed;
+      try {
+        const subscriptionLedger = require('../services/subscriptionLedgerService');
+        const activeSub = await subscriptionLedger.findActiveForUser(userId);
+        if (activeSub) {
+          hoursIncluded = Number(activeSub.hoursIncluded || hoursIncluded);
+          ledgerHoursUsed = Number(activeSub.hoursUsed || hoursUsed);
+        }
+      } catch (_err) {
+        // Fall through to legacy values; subscription ledger is best-effort.
+      }
       stats.monthlyUsage = {
-        hoursUsed,
-        hoursRemaining: Math.max(0, 5 - hoursUsed),
-        month: currentMonth
+        hoursUsed: ledgerHoursUsed,
+        hoursIncluded,
+        hoursRemaining: Math.max(0, hoursIncluded - ledgerHoursUsed),
+        month: currentMonth,
       };
     }
 
@@ -154,7 +174,7 @@ const getDashboardStats = asyncHandler(async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Dashboard Stats Error:', error);
+    (req.log || logger).error({ err: error }, 'Dashboard Stats Error');
     return sendError(res, 500, error.message || 'Failed to retrieve dashboard statistics');
   }
 });
@@ -228,7 +248,7 @@ const getTripHistory = asyncHandler(async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Trip History Error:', error);
+    (req.log || logger).error({ err: error }, 'Trip History Error');
     return sendError(res, 500, error.message || 'Failed to retrieve trip history');
   }
 });
@@ -280,7 +300,7 @@ const getUpcomingTrips = asyncHandler(async (req, res) => {
       count: upcomingTrips.length
     });
   } catch (error) {
-    console.error('Upcoming Trips Error:', error);
+    (req.log || logger).error({ err: error }, 'Upcoming Trips Error');
     return sendError(res, 500, error.message || 'Failed to retrieve upcoming trips');
   }
 });
@@ -339,7 +359,7 @@ const getActiveTrips = asyncHandler(async (req, res) => {
       count: activeTrips.length
     });
   } catch (error) {
-    console.error('Active Trips Error:', error);
+    (req.log || logger).error({ err: error }, 'Active Trips Error');
     return sendError(res, 500, error.message || 'Failed to retrieve active trips');
   }
 });
@@ -487,7 +507,7 @@ const getDriverDashboard = asyncHandler(async (req, res) => {
       pendingItems,
     });
   } catch (error) {
-    console.error('Driver Dashboard Error:', error);
+    (req.log || logger).error({ err: error }, 'Driver Dashboard Error');
     return sendError(res, 500, error.message || 'Failed to retrieve driver dashboard');
   }
 });
@@ -596,11 +616,6 @@ const getDriverTrips = asyncHandler(async (req, res) => {
     // ── Format trip cards ─────────────────────────────────────────────────────
     const trips = bookings.map((booking) => {
       const driverEarnings = computePayoutCents(booking, driver, settings) / 100;
-      // regularPrice shown as crossed-out when there's a discounted finalPrice
-      const originalEarnings =
-        booking.regularPrice && booking.regularPrice !== booking.finalPrice
-          ? computePayoutCents({ ...booking, finalPrice: booking.regularPrice }, driver, settings) / 100
-          : null;
 
       return {
         id: booking._id,
@@ -614,7 +629,6 @@ const getDriverTrips = asyncHandler(async (req, res) => {
         quantity: booking.quantity,
         isMembershipTrip: !!booking.subscriptionPrice,
         driverEarnings: Math.round(driverEarnings * 100) / 100,
-        originalEarnings: originalEarnings ? Math.round(originalEarnings * 100) / 100 : null,
         completedAt: booking.completedAt ?? null,
       };
     });
@@ -635,7 +649,7 @@ const getDriverTrips = asyncHandler(async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('Driver Trips Error:', error);
+    (req.log || logger).error({ err: error }, 'Driver Trips Error');
     return sendError(res, 500, error.message || 'Failed to retrieve driver trips');
   }
 });
@@ -794,8 +808,48 @@ const getDriverEarnings = asyncHandler(async (req, res) => {
       payoutNote: 'Payouts are processed every Monday. Funds arrive within 1–3 business days depending on your bank.',
     });
   } catch (error) {
-    console.error('Driver Earnings Error:', error);
+    (req.log || logger).error({ err: error }, 'Driver Earnings Error');
     return sendError(res, 500, error.message || 'Failed to retrieve driver earnings');
+  }
+});
+
+// T-2.4.5 — driver availability surface. Reads the driver's current commitment
+// state so the driver UI can render "Available / Committed / On a trip".
+const getDriverAvailability = asyncHandler(async (req, res) => {
+  try {
+    const driverId = req.user.id;
+    const driver = await User.findById(driverId).select('role driver.status driver.tier driver.regions driver.serveAllRegions').lean();
+    if (!driver || driver.role !== 'driver') return sendError(res, 403, 'Driver only');
+
+    const now = new Date();
+    const activeBooking = await Booking.findOne({
+      assignedDriver: driverId,
+      status: { $in: ['Confirmed', 'In Progress'] },
+      'dates.startDate': { $lte: now },
+      'dates.endDate': { $gte: now },
+    }).select('_id status dates region').lean();
+
+    const isApproved = driver.driver?.status === 'approved';
+    const tierEligible = ['Pro', 'Diamond'].includes(driver.driver?.tier);
+    const counted = isApproved && tierEligible && !activeBooking;
+
+    let presence = 'unavailable';
+    if (activeBooking) presence = 'on-trip';
+    else if (counted) presence = 'available';
+    else if (isApproved) presence = 'committed'; // approved but not in same-day pool (S-Level)
+
+    return sendSuccess(res, 200, 'Driver availability retrieved', {
+      presence,
+      countedInAQD: counted,
+      tier: driver.driver?.tier || null,
+      status: driver.driver?.status || null,
+      activeBooking: activeBooking
+        ? { _id: activeBooking._id, status: activeBooking.status, region: activeBooking.region }
+        : null,
+    });
+  } catch (error) {
+    (req.log || logger).error({ err: error }, 'Get Driver Availability Error');
+    return sendError(res, 500, error.message || 'Failed to retrieve driver availability');
   }
 });
 
@@ -807,5 +861,6 @@ module.exports = {
   getDriverDashboard,
   getDriverTrips,
   getDriverEarnings,
+  getDriverAvailability,
 };
 

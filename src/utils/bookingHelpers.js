@@ -13,6 +13,11 @@
 const mongoose = require('mongoose');
 const AddOn = require('../models/AddOn');
 const { getDriveSeconds } = require('../services/googleRoutesService');
+const { isEnabled } = require('../config/featureFlags');
+const {
+    countLateNightHours,
+    getOverageRate,
+} = require('../services/pricingHelpers');
 
 // ---------------------------------------------------------------------------
 // ObjectId helpers
@@ -270,7 +275,14 @@ async function calculateBookingPrice({
     stops,
     isSubscriber,
     usedHours,
-    bookingHours
+    bookingHours,
+    // Optional context for Phase 2 pricing extensions. Existing callers that
+    // don't pass these get the legacy 10%-off subscriber path.
+    region = null,
+    plan = null,
+    hoursIncluded = null,
+    startDate = null,
+    endDate = null,
 }) {
     const baseRate = Number(vehicleType?.hourlyPrice || 0);
     const qty = Number(quantity) || 1;
@@ -298,13 +310,55 @@ async function calculateBookingPrice({
     let regularPrice = totalBookedHours * baseRate + addOnsCost;
     let subscriberPrice = regularPrice;
 
-    let freeHoursLeft = Math.max(0, 5 - (usedHours || 0));
+    // Late-night override (T-2.3.1): hours that fall inside [00, 09) city-local
+    // are charged at standard rate even for subscribers. The remaining hours
+    // are member-eligible.
+    const lateNightFlagOn = isEnabled('PRICING_LATE_NIGHT_OVERRIDE');
+    const lateNightHours = (lateNightFlagOn && isSubscriber && startDate && endDate)
+        ? countLateNightHours(startDate, endDate, region?.timezone) * qty
+        : 0;
+
+    // Prepaid + overage (T-2.3.4 / T-2.3.5): when the overage flag is on and a
+    // plan with a known overage rate is supplied, the calculation switches from
+    // "10% off everything" to "free hours, then plan-specific overage rate".
+    //
+    // When the flag is ON, callers pass `hoursIncluded` as the REMAINING
+    // balance already net of prior usage (the controller subtracts ledger
+    // `hoursUsed` itself). Subtracting `usedHours` again would double-count.
+    // When the flag is OFF, the legacy 5-per-month literal still applies and
+    // `usedHours` is the running monthly total.
+    const overageFlagOn = isEnabled('PRICING_OVERAGE');
+    const overageRate = plan ? getOverageRate(plan) : null;
+    const legacyFreeHoursIncluded = 5;
+    let freeHoursLeft;
+    if (overageFlagOn && Number.isFinite(hoursIncluded) && hoursIncluded >= 0) {
+        freeHoursLeft = Number(hoursIncluded);
+    } else {
+        freeHoursLeft = Math.max(0, legacyFreeHoursIncluded - (usedHours || 0));
+    }
     let freeHoursUsed = 0;
+    let overageHours = 0;
 
     if (isSubscriber) {
-        freeHoursUsed = Math.min(totalBookedHours, freeHoursLeft);
-        const billableHours = Math.max(0, totalBookedHours - freeHoursLeft);
-        subscriberPrice = billableHours * baseRate * 0.9 + addOnsCost; // 10% off after free hours
+        // Late-night hours are billed at standard rate regardless of subscription
+        // and don't draw down the prepaid balance.
+        const eligibleSubscriberHours = Math.max(0, totalBookedHours - lateNightHours);
+        freeHoursUsed = Math.min(eligibleSubscriberHours, freeHoursLeft);
+        const billableMemberHours = Math.max(0, eligibleSubscriberHours - freeHoursUsed);
+
+        let memberPortion;
+        if (overageFlagOn && overageRate != null) {
+            // Plan-specific overage rate per phase2_notes.docx.
+            overageHours = billableMemberHours;
+            memberPortion = billableMemberHours * overageRate;
+        } else {
+            // Legacy behaviour — 10% off the standard rate for hours beyond the
+            // included allowance. Preserved until PRICING_OVERAGE flips on.
+            memberPortion = billableMemberHours * baseRate * 0.9;
+        }
+
+        const lateNightPortion = lateNightHours * baseRate;
+        subscriberPrice = memberPortion + lateNightPortion + addOnsCost;
     }
 
     return {
@@ -318,7 +372,11 @@ async function calculateBookingPrice({
             paidAddOns,
             freeAddOns,
             freeHoursUsed,
-            freeHoursLeft: isSubscriber ? Math.max(0, freeHoursLeft - totalBookedHours) : 0
+            freeHoursLeft: isSubscriber ? Math.max(0, freeHoursLeft - freeHoursUsed) : 0,
+            lateNightHours,
+            overageHours,
+            overageRate,
+            plan,
         }
     };
 }

@@ -1,4 +1,5 @@
 const twilio = require('twilio');
+const logger = require('../utils/logger');
 
 const clean = (value) =>
   String(value || '')
@@ -13,6 +14,34 @@ const fromPhoneNumber = clean(process.env.TWILIO_PHONE_NUMBER);
 const apiKeySid = clean(process.env.TWILIO_API_KEY_SID);
 const apiKeySecret = clean(process.env.TWILIO_API_KEY_SECRET);
 let client = null;
+
+// ─── T-1.1.4 — SMS allowlist + per-feature kill switches ─────────────────────
+// Allowlist: comma-separated phone numbers in E.164. When set, ONLY these
+// recipients will receive SMS in any environment. Use during staged rollout
+// or to limit blast radius during a production data import.
+const parseAllowlist = (raw) => {
+  if (!raw) return null;
+  const list = String(raw)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return list.length ? new Set(list) : null;
+};
+
+const truthyEnv = (raw, fallback = true) => {
+  if (raw == null) return fallback;
+  return !/^(0|false|no|off)$/i.test(String(raw).trim());
+};
+
+const SMS_ALLOWLIST = parseAllowlist(process.env.SMS_ALLOWLIST);
+const SMS_OTP_ENABLED = truthyEnv(process.env.SMS_OTP_ENABLED, true);
+const SMS_TRIP_ALERTS_ENABLED = truthyEnv(process.env.SMS_TRIP_ALERTS_ENABLED, true);
+const SMS_WELCOME_ENABLED = truthyEnv(process.env.SMS_WELCOME_ENABLED, true);
+
+const isAllowlisted = (phone) => {
+  if (!SMS_ALLOWLIST) return true; // allowlist not configured → allow all
+  return SMS_ALLOWLIST.has(phone);
+};
 
 const getClient = () => {
   if (client) return client;
@@ -56,8 +85,18 @@ const sendOTP = async (phoneNumber, otpCode) => {
       formattedPhone = `+${formattedPhone}`;
     }
 
+    if (!SMS_OTP_ENABLED) {
+      logger.info({ phone: formattedPhone }, 'OTP send skipped: SMS_OTP_ENABLED=false');
+      return { sid: 'kill-switch', status: 'skipped' };
+    }
+
+    if (!isAllowlisted(formattedPhone)) {
+      logger.info({ phone: formattedPhone }, 'OTP send skipped: not in SMS_ALLOWLIST');
+      return { sid: 'allowlist-skip', status: 'skipped' };
+    }
+
     if (process.env.NODE_ENV === 'development') {
-      console.log(`[DEV] SMS skipped. OTP for ${formattedPhone}: ${otpCode}`);
+      logger.info({ phone: formattedPhone, otp: '[REDACTED]' }, 'OTP send skipped in development');
       return { sid: 'dev-mock', status: 'skipped' };
     }
 
@@ -66,7 +105,9 @@ const sendOTP = async (phoneNumber, otpCode) => {
       to: formattedPhone,
     };
 
-    console.log(messagePayload)
+    // NEVER log `messagePayload.body` — it contains the OTP code in cleartext
+    // and pino's REDACT_PATHS cannot redact substrings inside a string field.
+    logger.info({ to: messagePayload.to }, 'Twilio OTP message payload prepared');
 
     if (messagingServiceSid) {
       messagePayload.messagingServiceSid = messagingServiceSid;
@@ -83,7 +124,7 @@ const sendOTP = async (phoneNumber, otpCode) => {
       phoneNumber: formattedPhone
     };
   } catch (error) {
-    console.error('Twilio SMS Error:', error);
+    logger.error({ err: error }, 'Twilio SMS Error');
     if (error?.code === 20003) {
       throw new Error(
         'Failed to send OTP: Twilio authentication failed. Check TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.'
@@ -108,8 +149,13 @@ const sendSMS = async (phoneNumber, body) => {
       formattedPhone = '+' + formattedPhone;
     }
 
+    if (!isAllowlisted(formattedPhone)) {
+      logger.info({ phone: formattedPhone }, 'SMS skipped: not in SMS_ALLOWLIST');
+      return { success: true, skipped: true, reason: 'not-in-allowlist', phoneNumber: formattedPhone };
+    }
+
     if (process.env.NODE_ENV === 'development') {
-      console.log(`[DEV] SMS skipped. Would send to ${formattedPhone}: ${body}`);
+      logger.info({ phone: formattedPhone, body }, 'SMS skipped in development');
       return { success: true, sid: 'dev-mock', phoneNumber: formattedPhone };
     }
 
@@ -125,7 +171,7 @@ const sendSMS = async (phoneNumber, body) => {
     const message = await getClient().messages.create(messagePayload);
     return { success: true, messageSid: message.sid, phoneNumber: formattedPhone };
   } catch (error) {
-    console.error('Twilio SMS Error:', error?.message || error);
+    logger.error({ err: error?.message || error }, 'Twilio SMS Error');
     return { success: false, error: error?.message || 'Unknown SMS error' };
   }
 };
@@ -134,6 +180,9 @@ const sendSMS = async (phoneNumber, body) => {
  * Send a welcome SMS after successful registration.
  */
 const sendWelcomeSMS = async (phoneNumber, userName) => {
+  if (!SMS_WELCOME_ENABLED) {
+    return { success: false, skipped: true, reason: 'kill-switch SMS_WELCOME_ENABLED=false' };
+  }
   const name = userName ? `, ${userName}` : '';
   return sendSMS(
     phoneNumber,
@@ -188,10 +237,13 @@ const sendTripAlert = async (user, templateKey, vars = {}) => {
   if (user.smsOptIn === false) {
     return { success: false, skipped: true, reason: 'user opted out' };
   }
+  if (!SMS_TRIP_ALERTS_ENABLED) {
+    return { success: false, skipped: true, reason: 'kill-switch SMS_TRIP_ALERTS_ENABLED=false' };
+  }
 
   const template = tripAlertTemplates[templateKey];
   if (!template) {
-    console.error(`Twilio: unknown trip-alert template "${templateKey}"`);
+    logger.error({ templateKey }, 'Twilio: unknown trip-alert template');
     return { success: false, error: `Unknown template ${templateKey}` };
   }
 

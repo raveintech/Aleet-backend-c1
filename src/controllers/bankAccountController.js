@@ -3,6 +3,7 @@ require('dotenv').config();
 const asyncHandler = require("express-async-handler");
 const BankAccount = require("../models/BankAccount.js");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const logger = require("../utils/logger");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const formatMethod = (doc) => ({
@@ -140,7 +141,7 @@ const checkBankAccount = asyncHandler(async (req, res) => {
       message: isFullyOnboarded ? "Driver's bank account is fully connected" : "Driver started onboarding but hasn't completed it yet",
     });
   } catch (error) {
-    console.error("Stripe account retrieve error:", error);
+    (req.log || logger).error({ err: error }, "Stripe account retrieve error");
     return res.status(500).json({ hasBankAccount: false, message: "Failed to verify bank account with Stripe", error: error.message });
   }
 });
@@ -181,7 +182,7 @@ const getStripeStatus = asyncHandler(async (req, res) => {
         : 'Onboarding started — please complete your Stripe setup',
     });
   } catch (error) {
-    console.error('Stripe status error:', error);
+    (req.log || logger).error({ err: error }, 'Stripe status error');
     return res.status(502).json({
       success: false,
       connected: false,

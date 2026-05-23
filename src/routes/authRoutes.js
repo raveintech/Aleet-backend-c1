@@ -21,31 +21,39 @@ const {
   handleUploadError,
   uploadNone,
 } = require("../utils/multer");
+const {
+  otpStartLimiter,
+  authAttemptLimiter,
+  generalAuthLimiter,
+} = require("../middleware/rateLimiters");
 
 const router = express.Router();
 
 // ── Customer signup flow ──────────────────────────────────────────────────────
-router.post("/signup/start", signupStart); // 1. Enter phone/email → send OTP
-router.post("/signup/verify", signupVerify); // 2. Enter OTP code → get signupToken (or driverToken)
-router.post("/signup/passcode", signupPasscode); // 3. Set password → get tempToken
+router.post("/signup/start", otpStartLimiter, signupStart); // 1. Enter phone/email → send OTP
+router.post("/signup/verify", authAttemptLimiter, signupVerify); // 2. Enter OTP code → get signupToken (or driverToken)
+router.post("/signup/passcode", generalAuthLimiter, signupPasscode); // 3. Set password → get tempToken
 router.post(
   "/signup/complete",
+  generalAuthLimiter,
   uploadDriverDocuments,
   handleUploadError,
   signupComplete,
 ); // 4. Name + email → JWT
 
 // ── Driver signup flow ────────────────────────────────────────────────────────
-router.post("/driver/signup/start", driverSignupStart); // 1. name + phone + email + password → OTP
+router.post("/driver/signup/start", otpStartLimiter, driverSignupStart); // 1. name + phone + email + password → OTP
 // Step 2 is shared: POST /signup/verify (returns driverToken for driver_signup purpose)
 router.post(
   "/driver/signup/documents",
+  generalAuthLimiter,
   uploadDriverDocuments,
   handleUploadError,
   driverSignupDocuments,
 ); // 3. ssn + vehicleTypes + images → docsToken
 router.post(
   "/driver/signup/complete",
+  generalAuthLimiter,
   uploadDriverComplete,
   handleUploadError,
   driverSignupComplete,
@@ -53,13 +61,14 @@ router.post(
 
 router.post(
   "/driver/signup/verify-otp",
+  authAttemptLimiter,
   verifyDriverSignupOTPController,
 );
 
 // ── Common ────────────────────────────────────────────────────────────────────
-router.post("/password/forgot", forgotPassword);
-router.post("/password/reset", resetPassword);
-router.post("/login", loginUser);
-router.post("/check-user", checkUser);
+router.post("/password/forgot", otpStartLimiter, forgotPassword);
+router.post("/password/reset", authAttemptLimiter, resetPassword);
+router.post("/login", authAttemptLimiter, loginUser);
+router.post("/check-user", generalAuthLimiter, checkUser);
 
 module.exports = router;

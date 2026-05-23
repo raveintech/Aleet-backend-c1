@@ -4,6 +4,18 @@ const Stripe = require('stripe');
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const Booking = require('../models/Booking');
 const User = require('../models/User');
+const logger = require('../utils/logger');
+const { MEMBERSHIP_PLAN } = require('../config/membership');
+
+// See controllers/subscriptionController.js — `session.subscription` is a
+// string when not expanded, an object when expanded. Persisting the object
+// would corrupt the field; coerce to .id everywhere.
+function extractStripeSubscriptionId(ref) {
+  if (!ref) return null;
+  if (typeof ref === 'string') return ref;
+  if (typeof ref === 'object' && typeof ref.id === 'string') return ref.id;
+  return null;
+}
 
 const CURRENCY = 'usd';
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:5173';
@@ -83,7 +95,7 @@ exports.createCheckoutSession = async (req, res) => {
       sessionId: session.id
     });
   } catch (err) {
-    console.error('Stripe createCheckoutSession error:', err);
+    (req?.log || logger).error({ err }, 'Stripe createCheckoutSession error');
     return res.status(500).json({ success: false, message: 'Failed to create checkout session' });
   }
 };
@@ -96,17 +108,24 @@ exports.webhook = async (req, res) => {
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    console.error('⚠️  Webhook verify failed:', err.message);
+    logger.error({ err: err.message }, 'Stripe webhook signature verification failed');
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  console.log('✅ Webhook received:', event.type);
+  logger.info({ eventType: event.type, eventId: event.id }, 'Stripe webhook received');
 
   try {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
-      const fullSession = await stripe.checkout.sessions.retrieve(session.id, { expand: ['payment_intent'] });
-      console.log('Session ID:', fullSession.id, 'payment_status:', fullSession.payment_status, 'metadata:', fullSession.metadata);
+      // Expand subscription so we have the recurring subscription ID for
+      // reconciliation when mode='subscription' is used.
+      const fullSession = await stripe.checkout.sessions.retrieve(session.id, {
+        expand: ['payment_intent', 'subscription'],
+      });
+      logger.info(
+        { sessionId: fullSession.id, paymentStatus: fullSession.payment_status, type: fullSession.metadata?.type },
+        'Stripe checkout session details'
+      );
 
       const bookingId = fullSession.metadata?.bookingId;
       const userId = fullSession.metadata?.userId;
@@ -116,13 +135,13 @@ exports.webhook = async (req, res) => {
       if (bookingId && type !== 'subscription') {
         const booking = await Booking.findById(bookingId);
         if (!booking) {
-          console.error('Booking not found:', bookingId);
+          logger.error({ bookingId }, 'Booking not found');
         } else {
           booking.paymentStatus = 'Paid';
           booking.paidAt = new Date();
           booking.stripePaymentIntentId = fullSession.payment_intent?.id || null;
           await booking.save();
-          console.log('💾 Booking marked Paid:', bookingId);
+          logger.info({ bookingId }, 'Booking marked Paid');
         }
       }
 
@@ -131,29 +150,53 @@ exports.webhook = async (req, res) => {
         const User = require('../models/User');
         const user = await User.findById(userId);
         if (!user) {
-          console.error('User not found for subscription:', userId);
+          logger.error({ userId }, 'User not found for subscription');
         } else {
-          // Update user subscription status
+          // Plan-included hours and price live in one place so the webhook,
+          // the manual processSubscriptionPayment endpoint, and the prepaid
+          // ledger all read the same value (T-2.3.4 / T-2.3.6).
+          const planHoursIncluded = MEMBERSHIP_PLAN.hoursIncluded;
+          const planPriceCents = MEMBERSHIP_PLAN.priceCents;
+          const cycleMs = MEMBERSHIP_PLAN.cycleDays * 24 * 60 * 60 * 1000;
           const subscriptionDetails = {
-            plan: 'monthly',
-            price: 449,
-            billingCycle: 'quarterly',
+            plan: MEMBERSHIP_PLAN.name,
+            price: planPriceCents / 100,
+            billingCycle: MEMBERSHIP_PLAN.billingCycle,
             startDate: new Date(),
-            nextBillingDate: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 90 days from now
+            nextBillingDate: new Date(Date.now() + cycleMs),
             paymentMethodId: fullSession.payment_intent?.id || null,
             stripeCustomerId: fullSession.customer || null,
             stripeSessionId: fullSession.id,
             stripePaymentIntentId: fullSession.payment_intent?.id || null,
+            // `expand: ['subscription']` returns the full object; normalize to
+            // the string ID so the field stays queryable against Stripe.
+            stripeSubscriptionId: extractStripeSubscriptionId(fullSession.subscription),
             isActive: true,
-            monthlyHoursIncluded: 5,
-            discountRate: 0.9
+            monthlyHoursIncluded: planHoursIncluded,
+            discountRate: MEMBERSHIP_PLAN.discountRate,
           };
 
           await User.findByIdAndUpdate(userId, {
             subscriptionStatus: 'subscriber',
             subscriptionDetails: subscriptionDetails
           });
-          console.log('💾 User subscription activated:', userId);
+
+          // T-2.3.4 — open a Subscription cycle for the new subscriber.
+          try {
+            const subscriptionLedger = require('../services/subscriptionLedgerService');
+            await subscriptionLedger.openCycle({
+              userId,
+              plan: MEMBERSHIP_PLAN.name,
+              hoursIncluded: planHoursIncluded,
+              priceCents: planPriceCents,
+              stripeSubscriptionId: extractStripeSubscriptionId(fullSession.subscription),
+              cycleStart: subscriptionDetails.startDate,
+              cycleEnd: subscriptionDetails.nextBillingDate,
+            });
+          } catch (err) {
+            (req?.log || logger).error({ err, userId }, 'Failed to open subscription cycle');
+          }
+          (req?.log || logger).info({ userId }, 'User subscription activated');
         }
       }
     }
@@ -169,13 +212,13 @@ exports.webhook = async (req, res) => {
           { stripeAccountId },
           { $set: { stripeOnboardingComplete: true } }
         );
-        console.log('✅ Stripe Connect onboarding complete for:', stripeAccountId);
+        logger.info({ stripeAccountId }, 'Stripe Connect onboarding complete');
       }
     }
 
     res.json({ received: true });
   } catch (err) {
-    console.error('Webhook handler error:', err);
+    logger.error({ err }, 'Webhook handler error');
     res.status(500).send('Webhook handler failed');
   }
 };
@@ -214,7 +257,7 @@ exports.getSessionStatus = async (req, res) => {
       } : null
     });
   } catch (err) {
-    console.error('getSessionStatus error:', err);
+    (req?.log || logger).error({ err }, 'getSessionStatus error');
     return res.status(500).json({ success: false, message: 'Failed to load session status' });
   }
 };

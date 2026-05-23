@@ -13,6 +13,7 @@
  */
 
 const axios = require('axios');
+const logger = require('../utils/logger');
 
 const ROUTES_API_URL = 'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix';
 
@@ -87,7 +88,7 @@ async function callRoutesApi(origin, destination, { departureTime = null, fieldM
         : null;
 
     if (!element || element.condition !== 'ROUTE_EXISTS') {
-        console.warn('[Routes API] No route found:', JSON.stringify(element));
+        logger.warn({ element }, 'Routes API: no route found');
         return null;
     }
 
@@ -114,7 +115,7 @@ async function getDistanceMiles(origin, destination) {
         if (!element || typeof element.distanceMeters !== 'number') return null;
         return element.distanceMeters / 1609.344;
     } catch (err) {
-        console.error('[Routes API] getDistanceMiles error:', err.message);
+        logger.error({ err: err.message }, 'Routes API getDistanceMiles error');
         return null;
     }
 }
@@ -142,7 +143,7 @@ async function getDriveSeconds(origin, destination, departureIsoUtc) {
         const sec = parseInt(durationStr.replace('s', ''), 10);
         return isNaN(sec) ? null : sec;
     } catch (err) {
-        console.error('[Routes API] getDriveSeconds error:', err.message);
+        logger.error({ err: err.message }, 'Routes API getDriveSeconds error');
         return null;
     }
 }

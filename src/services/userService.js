@@ -148,12 +148,8 @@ const updatePhoneVerification = async (phone, isVerified = true) => {
   );
 };
 
-// Mask SSN: show only last 4 digits
-const maskSSN = (ssn) => {
-  if (!ssn) return null;
-  const digits = String(ssn).replace(/\D/g, '');
-  return `***-**-${digits.slice(-4)}`;
-};
+// Centralized — handles both ciphertext envelope (T-1.1.1) and plaintext.
+const { maskSSN } = require('./cryptoService');
 
 // Format user response — role-aware, no cross-role data leakage
 const formatUser = (user) => {

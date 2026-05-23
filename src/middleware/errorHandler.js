@@ -4,6 +4,7 @@
  */
 
 const { sendError } = require('../utils/responseHelper');
+const logger = require('../utils/logger');
 
 /**
  * Global error handler middleware
@@ -13,7 +14,7 @@ const { sendError } = require('../utils/responseHelper');
  * @param {Function} next - Express next function
  */
 const errorHandler = (err, req, res, next) => {
-  console.error('Global Error Handler:', err);
+  (req.log || logger).error({ err }, 'Unhandled error');
 
   // Mongoose validation error
   if (err.name === 'ValidationError') {

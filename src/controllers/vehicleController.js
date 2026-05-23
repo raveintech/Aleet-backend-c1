@@ -1,5 +1,6 @@
 const VehicleType = require('../models/Vehicle');
 const { sendSuccess, sendError, sendValidationError, sendNotFound, sendConflict } = require('../utils/responseHelper');
+const logger = require('../utils/logger');
 
 // Add a new vehicle type (for admin to add vehicle types)
 const addVehicleType = async (req, res) => {
@@ -27,7 +28,7 @@ const addVehicleType = async (req, res) => {
     await newVehicleType.save();
     return sendSuccess(res, 201, 'Vehicle type added successfully', newVehicleType);
   } catch (error) {
-    console.error('Add Vehicle Type Error:', error);
+    (req.log || logger).error({ err: error }, 'Add Vehicle Type Error');
     return sendError(res, 500, error.message || 'Failed to add vehicle type');
   }
 };
@@ -39,7 +40,7 @@ const getAllVehicleTypes = async (req, res) => {
     const vehicleTypes = await VehicleType.find();
     return sendSuccess(res, 200, 'Vehicle types retrieved successfully', vehicleTypes);
   } catch (error) {
-    console.error('Get Vehicle Types Error:', error);
+    (req.log || logger).error({ err: error }, 'Get Vehicle Types Error');
     return sendError(res, 500, error.message || 'Failed to retrieve vehicle types');
   }
 };
@@ -68,7 +69,7 @@ const updateVehicleType = async (req, res) => {
 
     return sendSuccess(res, 200, 'Vehicle type updated successfully', vehicleType);
   } catch (error) {
-    console.error('Update Vehicle Type Error:', error);
+    (req.log || logger).error({ err: error }, 'Update Vehicle Type Error');
     return sendError(res, 500, error.message || 'Failed to update vehicle type');
   }
 };
@@ -92,7 +93,7 @@ const deleteVehicleType = async (req, res) => {
 
     return sendSuccess(res, 200, 'Vehicle type deleted successfully');
   } catch (error) {
-    console.error('Delete Vehicle Type Error:', error);
+    (req.log || logger).error({ err: error }, 'Delete Vehicle Type Error');
     return sendError(res, 500, error.message || 'Failed to delete vehicle type');
   }
 };

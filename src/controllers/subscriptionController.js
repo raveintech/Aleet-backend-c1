@@ -10,6 +10,25 @@ const {
   sendNotFound,
   sendUnauthorized,
 } = require('../utils/responseHelper');
+const subscriptionLedger = require('../services/subscriptionLedgerService');
+const logger = require('../utils/logger');
+const { MEMBERSHIP_PLAN } = require('../config/membership');
+
+/**
+ * Normalize a Stripe Subscription reference into its string ID.
+ *
+ * Stripe returns `session.subscription` as a string when the session was
+ * retrieved without `expand: ['subscription']`, and as the full Subscription
+ * object when it was. Persisting the object directly would let Mongoose
+ * coerce it to "[object Object]" — keep the helper at the controller boundary
+ * so every write site stays defensive.
+ */
+function extractStripeSubscriptionId(ref) {
+  if (!ref) return null;
+  if (typeof ref === 'string') return ref;
+  if (typeof ref === 'object' && typeof ref.id === 'string') return ref.id;
+  return null;
+}
 
 const CURRENCY = 'usd'
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:5173';
@@ -28,40 +47,65 @@ const createSubscriptionCheckout = asyncHandler(async (req, res) => {
       return sendValidationError(res, 'User is already subscribed');
     }
 
-    // Create Stripe Checkout Session for quarterly subscription ($1,347)
-    const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
+    // Recurring Stripe Price ID is the only configuration that lets Stripe
+    // run quarterly renewal automatically. Without it, the platform is
+    // collecting a one-shot $1,347 with no re-charge — a real billing bug.
+    // We fall back to payment mode for dev / staging so the local flow works,
+    // but we warn loudly so prod env without the var stands out in logs.
+    const usingSubscriptionMode = Boolean(MEMBERSHIP_PLAN.stripePriceId);
+    if (!usingSubscriptionMode) {
+      (req.log || logger).warn(
+        { userId: userId.toString(), env: process.env.NODE_ENV },
+        'STRIPE_MEMBERSHIP_PRICE_ID is not set — falling back to one-shot payment mode. ' +
+        'Stripe will NOT renew this subscription quarterly. Configure a recurring Price in Stripe and set the env var.'
+      );
+    }
+
+    const sessionParams = {
       payment_method_types: ['card'],
       ...(user?.email ? { customer_email: user.email } : {}),
       metadata: {
         userId: userId.toString(),
         type: 'subscription',
-        plan: 'quarterly'
+        plan: MEMBERSHIP_PLAN.name,
       },
-      line_items: [
-        {
-          price_data: {
-            currency: CURRENCY,
-            product_data: {
-              name: 'Swift Haven Premium Subscription',
-              description: 'Quarterly subscription: $449/month billed quarterly at $1,347. Includes 5 free hours per month and 10% discount on all bookings.'
-            },
-            unit_amount: 134700, // $1,347 in cents
-          },
-          quantity: 1,
-        }
-      ],
       success_url: `${APP_BASE_URL}/subscription-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${APP_BASE_URL}/subscription-cancelled`,
-    });
+    };
+
+    if (usingSubscriptionMode) {
+      sessionParams.mode = 'subscription';
+      sessionParams.line_items = [{ price: MEMBERSHIP_PLAN.stripePriceId, quantity: 1 }];
+      // Stripe needs the subscription metadata to propagate to invoices for
+      // reconciliation; the checkout-session metadata is not carried forward.
+      sessionParams.subscription_data = {
+        metadata: { userId: userId.toString(), plan: MEMBERSHIP_PLAN.name },
+      };
+    } else {
+      sessionParams.mode = 'payment';
+      sessionParams.line_items = [{
+        price_data: {
+          currency: CURRENCY,
+          product_data: {
+            name: 'Aleet Premium Subscription',
+            description: `Quarterly subscription: $${(MEMBERSHIP_PLAN.monthlyDisplayCents / 100).toFixed(0)}/month billed quarterly at $${(MEMBERSHIP_PLAN.priceCents / 100).toFixed(0)}. Includes ${MEMBERSHIP_PLAN.hoursIncluded} free hours per month.`,
+          },
+          unit_amount: MEMBERSHIP_PLAN.priceCents,
+        },
+        quantity: 1,
+      }];
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
 
     return sendSuccess(res, 200, 'Checkout session created successfully', {
       url: session.url,
       sessionId: session.id,
-      message: 'Redirect to Stripe checkout to complete subscription'
+      mode: sessionParams.mode,
+      message: 'Redirect to Stripe checkout to complete subscription',
     });
   } catch (error) {
-    console.error('Subscription Checkout Error:', error);
+    (req.log || logger).error({ err: error }, 'Subscription Checkout Error');
     return sendError(res, 500, error.message || 'Failed to create subscription checkout');
   }
 });
@@ -90,19 +134,29 @@ const processSubscriptionPayment = asyncHandler(async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return sendNotFound(res, 'User not found');
 
-    // Update user subscription status
+    // Update user subscription status. Plan-included hours and price live on
+    // the user's `subscriptionDetails`; the prepaid ledger (T-2.3.4) reads
+    // these on every drawdown.
+    const planHoursIncluded = MEMBERSHIP_PLAN.hoursIncluded;
+    const planPriceCents = MEMBERSHIP_PLAN.priceCents;
+    const cycleMs = MEMBERSHIP_PLAN.cycleDays * 24 * 60 * 60 * 1000;
     const subscriptionDetails = {
-      plan: 'monthly',
-      price: 449,
-      billingCycle: 'quarterly',
+      plan: MEMBERSHIP_PLAN.name,
+      price: planPriceCents / 100,
+      billingCycle: MEMBERSHIP_PLAN.billingCycle,
       startDate: new Date(),
-      nextBillingDate: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 90 days from now
+      nextBillingDate: new Date(Date.now() + cycleMs),
       paymentMethodId: session.payment_intent?.id || null,
       isActive: true,
-      monthlyHoursIncluded: 5,
-      discountRate: 0.9,
+      monthlyHoursIncluded: planHoursIncluded,
+      discountRate: MEMBERSHIP_PLAN.discountRate,
       stripeSessionId: sessionId,
-      stripePaymentIntentId: session.payment_intent?.id || null
+      stripePaymentIntentId: session.payment_intent?.id || null,
+      // `session.subscription` is a string ID when the session was retrieved
+      // without expansion, and a full Subscription object when it was. Both
+      // shapes are passed through this normalizer so we always persist the
+      // string ID (Mongoose would otherwise coerce the object to "[object Object]").
+      stripeSubscriptionId: extractStripeSubscriptionId(session.subscription),
     };
 
     await User.findByIdAndUpdate(userId, {
@@ -110,15 +164,33 @@ const processSubscriptionPayment = asyncHandler(async (req, res) => {
       subscriptionDetails: subscriptionDetails
     });
 
+    // T-2.3.4 — open a Subscription cycle doc so the prepaid-hour ledger has a
+    // place to draw down from when PRICING_OVERAGE is enabled.
+    try {
+      await subscriptionLedger.openCycle({
+        userId,
+        plan: MEMBERSHIP_PLAN.name,
+        hoursIncluded: planHoursIncluded,
+        priceCents: planPriceCents,
+        // Stripe subscription ID (not session ID) so quarterly reconciliation
+        // against the Stripe API can find this cycle.
+        stripeSubscriptionId: extractStripeSubscriptionId(session.subscription),
+        cycleStart: subscriptionDetails.startDate,
+        cycleEnd: subscriptionDetails.nextBillingDate,
+      });
+    } catch (err) {
+      (req.log || logger).error({ err, userId }, 'Failed to open subscription cycle');
+    }
+
     const updatedUser = await User.findById(userId).select('-password');
 
     return sendSuccess(res, 200, 'Successfully subscribed to monthly plan', {
       user: updatedUser,
       subscription: subscriptionDetails,
-      message: 'Welcome to Swift Haven Premium! You now have 5 free hours per month and 10% discount on all bookings.'
+      message: `Welcome to Swift Haven Premium! You now have ${planHoursIncluded} free hours per month and 10% discount on all bookings.`
     });
   } catch (error) {
-    console.error('Process Subscription Payment Error:', error);
+    (req.log || logger).error({ err: error }, 'Process Subscription Payment Error');
     return sendError(res, 500, error.message || 'Failed to process subscription payment');
   }
 });
@@ -136,6 +208,7 @@ const getSubscriptionStatus = asyncHandler(async (req, res) => {
     const currentMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
     const monthlyHours = await MonthlyHours.findOne({ user: userId, yearMonth: currentMonth });
 
+    const planIncluded = Number(user.subscriptionDetails?.monthlyHoursIncluded) || 0;
     const subscriptionInfo = {
       status: user.subscriptionStatus,
       isSubscriber: user.subscriptionStatus === 'subscriber',
@@ -143,14 +216,14 @@ const getSubscriptionStatus = asyncHandler(async (req, res) => {
       currentMonthUsage: {
         yearMonth: currentMonth,
         hoursUsed: monthlyHours?.totalHoursUsed || 0,
-        hoursRemaining: user.subscriptionStatus === 'subscriber' ? Math.max(0, 5 - (monthlyHours?.totalHoursUsed || 0)) : 0,
+        hoursRemaining: user.subscriptionStatus === 'subscriber' ? Math.max(0, planIncluded - (monthlyHours?.totalHoursUsed || 0)) : 0,
         nextBillingDate: user.subscriptionDetails?.nextBillingDate || null
       }
     };
 
     return sendSuccess(res, 200, 'Subscription status retrieved', subscriptionInfo);
   } catch (error) {
-    console.error('Get Subscription Status Error:', error);
+    (req.log || logger).error({ err: error }, 'Get Subscription Status Error');
     return sendError(res, 500, error.message || 'Failed to retrieve subscription status');
   }
 });
@@ -179,6 +252,16 @@ const cancelSubscription = asyncHandler(async (req, res) => {
       }
     });
 
+    // Record the cancellation intent on the Subscription ledger doc. Per
+    // P0 B5, the doc stays `status: 'active'` until `cycleEnd`; this call
+    // stamps `cancelledAt` + `cancellationReason` so the (still-deferred)
+    // cycle-sweep job can find it and transition to `cancelled` then.
+    try {
+      await subscriptionLedger.cancel({ userId, reason: reason || 'User requested cancellation' });
+    } catch (err) {
+      (req.log || logger).error({ err, userId }, 'Failed to record cancellation on subscription ledger');
+    }
+
     const updatedUser = await User.findById(userId).select('-password');
 
     return sendSuccess(res, 200, 'Subscription cancelled successfully', {
@@ -186,7 +269,7 @@ const cancelSubscription = asyncHandler(async (req, res) => {
       message: 'Your subscription has been cancelled. You will retain access until your current billing period ends.'
     });
   } catch (error) {
-    console.error('Cancel Subscription Error:', error);
+    (req.log || logger).error({ err: error }, 'Cancel Subscription Error');
     return sendError(res, 500, error.message || 'Failed to cancel subscription');
   }
 });
@@ -194,30 +277,32 @@ const cancelSubscription = asyncHandler(async (req, res) => {
 // Get Subscription Benefits
 const getSubscriptionBenefits = asyncHandler(async (req, res) => {
   try {
+    const monthlyDollars = MEMBERSHIP_PLAN.monthlyDisplayCents / 100;
+    const quarterlyDollars = MEMBERSHIP_PLAN.priceCents / 100;
     const benefits = {
       monthlyPlan: {
-        price: 449,
-        billingCycle: 'quarterly',
-        totalQuarterly: 1347,
+        price: monthlyDollars,
+        billingCycle: MEMBERSHIP_PLAN.billingCycle,
+        totalQuarterly: quarterlyDollars,
         benefits: [
-          '5 free hours per month',
+          `${MEMBERSHIP_PLAN.hoursIncluded} free hours per month`,
           '10% discount on all bookings',
           'Priority customer support',
           'Free VIP add-ons',
           'No distance surcharge up to 20 miles',
-          'Flexible booking changes'
-        ]
+          'Flexible booking changes',
+        ],
       },
       comparison: {
         regularPrice: 'Full price for all bookings',
-        subscriptionPrice: '$449/month (billed quarterly at $1,347)',
-        savings: 'Average savings of $200-500 per month for frequent users'
-      }
+        subscriptionPrice: `$${monthlyDollars.toFixed(0)}/month (billed quarterly at $${quarterlyDollars.toFixed(0)})`,
+        savings: 'Average savings of $200-500 per month for frequent users',
+      },
     };
 
     return sendSuccess(res, 200, 'Subscription benefits retrieved', benefits);
   } catch (error) {
-    console.error('Get Benefits Error:', error);
+    (req.log || logger).error({ err: error }, 'Get Benefits Error');
     return sendError(res, 500, error.message || 'Failed to retrieve subscription benefits');
   }
 });
@@ -234,9 +319,20 @@ const updatePaymentMethod = asyncHandler(async (req, res) => {
       return sendValidationError(res, 'User is not currently subscribed');
     }
 
-    // Create Stripe Customer Portal session for payment method management
+    // Stripe's billing-portal API requires a Customer ID (cus_*). Falling back
+    // to email would 400 from Stripe. If we never captured the customer ID at
+    // subscription time, surface a clear error rather than masking it.
+    const stripeCustomerId = user.subscriptionDetails?.stripeCustomerId;
+    if (!stripeCustomerId) {
+      return sendValidationError(
+        res,
+        'No Stripe customer is associated with this subscription. Please contact support.',
+        { reason: 'STRIPE_CUSTOMER_MISSING' }
+      );
+    }
+
     const portalSession = await stripe.billingPortal.sessions.create({
-      customer: user.subscriptionDetails?.stripeCustomerId || user.email, // Use email as fallback
+      customer: stripeCustomerId,
       return_url: `${APP_BASE_URL}/subscription-settings`,
     });
 
@@ -245,7 +341,7 @@ const updatePaymentMethod = asyncHandler(async (req, res) => {
       message: 'Redirect to Stripe portal to update payment method'
     });
   } catch (error) {
-    console.error('Update Payment Method Error:', error);
+    (req.log || logger).error({ err: error }, 'Update Payment Method Error');
     return sendError(res, 500, error.message || 'Failed to create payment method portal');
   }
 });
@@ -278,7 +374,7 @@ const createStripeCustomer = asyncHandler(async (req, res) => {
       message: 'Customer profile created for subscription management'
     });
   } catch (error) {
-    console.error('Create Stripe Customer Error:', error);
+    (req.log || logger).error({ err: error }, 'Create Stripe Customer Error');
     return sendError(res, 500, error.message || 'Failed to create Stripe customer');
   }
 });

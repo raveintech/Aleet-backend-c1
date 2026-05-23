@@ -88,7 +88,21 @@ const userSchema = new mongoose.Schema(
 
       licenseNumber: { type: String, default: null },   // e.g. DL-2024-001
       licenseExpiry: { type: Date, default: null },      // expiry date of driver's license
-      ssn: { type: String, select: false },
+      // T-1.1.1 — AES-GCM field-level encryption. The setter writes ciphertext
+      // (Deploy 1a: every new write is encrypted). Reads must go through
+      // `cryptoService.decrypt`/`maskSSN`; never echo raw stored value to a
+      // controller response without masking. Operational follow-up: T-1.1.0
+      // KMS provisioning swaps the env-var key source for `kms.Decrypt(dek)`.
+      ssn: {
+        type: String,
+        select: false,
+        set(value) {
+          if (value == null || value === '') return value;
+          // Lazy-require to avoid circular import during model boot.
+          const { encrypt } = require('../services/cryptoService');
+          return encrypt(value);
+        },
+      },
       licenseImage: { type: String, default: null },
       vehicleImage: { type: String, default: null },
       forHireLicenseImage: { type: String, default: null },

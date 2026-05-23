@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const { sendSuccess, sendError, sendValidationError, sendNotFound } = require('../utils/responseHelper');
 const { fileUrl } = require('../utils/multer');
 const { resolveDriverTier } = require('../services/driverTierService');
+const logger = require('../utils/logger');
 
 
 const assignDriverToBooking = async (req, res) => {
@@ -31,7 +32,7 @@ const assignDriverToBooking = async (req, res) => {
 
     return sendSuccess(res, 200, 'Driver assigned successfully', booking);
   } catch (error) {
-    console.error('Assign Driver Error:', error);
+    (req.log || logger).error({ err: error }, 'Assign Driver Error');
     return sendError(res, 500, error.message || 'Failed to assign driver');
   }
 };
@@ -80,7 +81,7 @@ const toggleDriverStatus = async (req, res) => {
       backgroundCheck: driver.driver.backgroundCheck,
     });
   } catch (error) {
-    console.error('Toggle Driver Status Error:', error);
+    (req.log || logger).error({ err: error }, 'Toggle Driver Status Error');
     return sendError(res, 500, error.message || 'Failed to update driver status');
   }
 };
@@ -89,11 +90,9 @@ const toggleDriverStatus = async (req, res) => {
 
 
 
-const maskSSN = (ssn) => {
-  if (!ssn) return null;
-  const digits = String(ssn).replace(/\D/g, '');
-  return `***-**-${digits.slice(-4)}`;
-};
+// Centralized in cryptoService so masking handles both ciphertext envelope
+// (T-1.1.1) and legacy plaintext (Deploy 1a dual-read) consistently.
+const { maskSSN } = require('../services/cryptoService');
 
 const formatDriverForAdmin = (driver) => ({
   _id: driver._id,
@@ -169,7 +168,7 @@ const getAllDrivers = async (req, res) => {
       pages: Math.ceil(total / limitNum),
     });
   } catch (error) {
-    console.error('Get All Drivers Error:', error);
+    (req.log || logger).error({ err: error }, 'Get All Drivers Error');
     return sendError(res, 500, error.message || 'Failed to retrieve drivers');
   }
 };
@@ -192,7 +191,7 @@ const approveDriver = async (req, res) => {
 
     return sendSuccess(res, 200, 'Driver approved successfully', formatDriverForAdmin(driver));
   } catch (error) {
-    console.error('Approve Driver Error:', error);
+    (req.log || logger).error({ err: error }, 'Approve Driver Error');
     return sendError(res, 500, error.message || 'Failed to approve driver');
   }
 };
@@ -212,7 +211,7 @@ const requestRevision = async (req, res) => {
 
     return sendSuccess(res, 200, 'Driver sent for revision', formatDriverForAdmin(driver));
   } catch (error) {
-    console.error('Request Revision Error:', error);
+    (req.log || logger).error({ err: error }, 'Request Revision Error');
     return sendError(res, 500, error.message || 'Failed to request revision');
   }
 };
@@ -243,7 +242,7 @@ const uploadAleetLicense = async (req, res) => {
 
     return sendSuccess(res, 200, 'Aleet license uploaded and tier recalculated', formatDriverForAdmin(driver));
   } catch (error) {
-    console.error('Upload Aleet License Error:', error);
+    (req.log || logger).error({ err: error }, 'Upload Aleet License Error');
     return sendError(res, 500, error.message || 'Failed to upload license');
   }
 };
@@ -270,7 +269,7 @@ const updateDriverRegions = async (req, res) => {
 
     return sendSuccess(res, 200, 'Driver regions updated', formatDriverForAdmin(driver));
   } catch (error) {
-    console.error('Update Driver Regions Error:', error);
+    (req.log || logger).error({ err: error }, 'Update Driver Regions Error');
     return sendError(res, 500, error.message || 'Failed to update regions');
   }
 };
@@ -342,7 +341,7 @@ const getDriverLicensing = async (req, res) => {
       pages: Math.ceil(total / limitNum)
     });
   } catch (error) {
-    console.error('Get Driver Licensing Error:', error);
+    (req.log || logger).error({ err: error }, 'Get Driver Licensing Error');
     return sendError(res, 500, error.message || 'Failed to retrieve licensing data');
   }
 };
@@ -359,7 +358,7 @@ const getSidebarStats = async (req, res) => {
       pendingDriverApprovals,
     });
   } catch (error) {
-    console.error('Get Sidebar Stats Error:', error);
+    (req.log || logger).error({ err: error }, 'Get Sidebar Stats Error');
     return sendError(res, 500, error.message || 'Failed to retrieve sidebar stats');
   }
 };
@@ -503,7 +502,7 @@ const getAdminDashboard = async (req, res) => {
       topDrivers: topDriversAgg.map((d, i) => ({ rank: i + 1, ...d })),
     });
   } catch (error) {
-    console.error('Admin Dashboard Error:', error);
+    (req.log || logger).error({ err: error }, 'Admin Dashboard Error');
     return sendError(res, 500, error.message || 'Failed to retrieve admin dashboard');
   }
 };

@@ -6,10 +6,23 @@ const connectDB = require('./config/db'); // 🟢 DB connection
 // Load environment variables
 dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
 
+const logger = require('./utils/logger');
+const requestLogger = require('./middleware/requestLogger');
+
 // Connect to MongoDB 🟡
 connectDB();
 
 const app = express();
+
+// Trust the first reverse-proxy hop so `req.ip` reflects the real client IP
+// when the service is deployed behind a load balancer. Without this,
+// `express-rate-limit` keys on the LB's IP and the OTP/login/signup limits
+// collapse to one global bucket (legit users blocked after 5 OTP attempts;
+// attackers can spoof X-Forwarded-For). Increase the hop count if more than
+// one trusted proxy sits in front of the app.
+app.set('trust proxy', 1);
+
+app.use(requestLogger);
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'Aleet Backend is running' }));
 
@@ -72,6 +85,23 @@ app.use('/api/regions', regionRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
-// Start server
+// Start server.
+//
+// SSN encryption boot order:
+//   1. cryptoService boot-time assertion already ran at require time —
+//      production refuses to load without a configured key source.
+//   2. If KMS_PROVIDER=aws, unwrap the DEK BEFORE the listener accepts
+//      requests, so the first encrypt() can't race the boot.
+//   3. If KMS isn't configured, cryptoService falls back to the env-var key
+//      on first use.
 const PORT = process.env.PORT;
-app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+(async () => {
+  try {
+    const { initEncryption } = require('./services/kms');
+    await initEncryption();
+  } catch (err) {
+    logger.error({ err }, 'SSN encryption initialization failed — refusing to start');
+    process.exit(1);
+  }
+  app.listen(PORT, () => logger.info({ port: PORT }, 'Aleet backend listening'));
+})();

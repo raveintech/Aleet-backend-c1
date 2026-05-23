@@ -1,5 +1,6 @@
 const AddOn = require('../models/AddOn');
 const { sendSuccess, sendError, sendValidationError, sendNotFound, sendConflict } = require('../utils/responseHelper');
+const logger = require('../utils/logger');
 
 // Add a new AddOn (Admin only)
 const addAddOn = async (req, res) => {
@@ -31,7 +32,7 @@ const addAddOn = async (req, res) => {
     await newAddOn.save();
     return sendSuccess(res, 201, 'Add-on added successfully', newAddOn);
   } catch (error) {
-    console.error('Add AddOn Error:', error);
+    (req.log || logger).error({ err: error }, 'Add AddOn Error');
     return sendError(res, 500, error.message || 'Failed to add add-on');
   }
 };
@@ -46,7 +47,7 @@ const getAllAddOns = async (req, res) => {
 
     return sendSuccess(res, 200, 'Add-ons retrieved successfully', { free, paid });
   } catch (error) {
-    console.error('Get All AddOns Error:', error);
+    (req.log || logger).error({ err: error }, 'Get All AddOns Error');
     return sendError(res, 500, error.message || 'Failed to retrieve add-ons');
   }
 };
@@ -78,7 +79,7 @@ const updateAddOn = async (req, res) => {
     await addOn.save();
     return sendSuccess(res, 200, 'Add-on updated successfully', addOn);
   } catch (error) {
-    console.error('Update AddOn Error:', error);
+    (req.log || logger).error({ err: error }, 'Update AddOn Error');
     return sendError(res, 500, error.message || 'Failed to update add-on');
   }
 };
@@ -100,7 +101,7 @@ const deleteAddOn = async (req, res) => {
     await addOn.deleteOne();
     return sendSuccess(res, 200, 'Add-on deleted successfully');
   } catch (error) {
-    console.error('Delete AddOn Error:', error);
+    (req.log || logger).error({ err: error }, 'Delete AddOn Error');
     return sendError(res, 500, error.message || 'Failed to delete add-on');
   }
 };

@@ -2,6 +2,7 @@
  * Standardized Response Helper for Swift Haven Backend
  * Ensures consistent response format across all APIs
  */
+const logger = require('./logger');
 
 /**
  * Send success response
@@ -45,6 +46,12 @@ const sendError = (res, statusCode = 500, message = 'Internal Server Error', err
 
   if (errors !== null) {
     response.errors = errors;
+    // T-2.2.4 — surface a machine-readable `reason` code on top-level when
+    // callers pass `{ reason: 'CODE', ... }` as the errors blob. Lets the
+    // frontend map error codes to localized strings without parsing prose.
+    if (typeof errors === 'object' && !Array.isArray(errors) && typeof errors.reason === 'string') {
+      response.reason = errors.reason;
+    }
   }
 
   return res.status(statusCode).json(response);
@@ -129,13 +136,13 @@ const sendPaginated = (res, message = 'Data retrieved successfully', data = [], 
 const asyncHandler = (fn) => {
   return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch((error) => {
-      console.error('Async Handler Error:', error);
-      
+      (req.log || logger).error({ err: error }, 'Async Handler Error');
+
       // If it's a known error with message, use it
       if (error.message) {
         return sendError(res, 500, error.message);
       }
-      
+
       // Default server error
       return sendError(res, 500, 'Internal Server Error');
     });

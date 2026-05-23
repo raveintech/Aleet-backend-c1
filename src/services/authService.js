@@ -15,6 +15,8 @@ const {
 const { fileUrl } = require("../utils/multer");
 const { resolveDriverTier } = require("./driverTierService");
 const { validateSSN } = require("../utils/ssnValidator");
+const logger = require("../utils/logger");
+const cryptoService = require("./cryptoService");
 
 const PhoneOTP = require("../models/PhoneOTP");
 // const { generateOTP, sendOTP } = require('./twilioService');
@@ -125,9 +127,9 @@ const registerUser = async (body, files) => {
     try {
       await autoInviteDriverToCheckr(user._id);
     } catch (error) {
-      console.error(
-        "Checkr auto-invite failed:",
-        error?.response?.data || error.message,
+      logger.error(
+        { err: error?.response?.data || error.message },
+        "Checkr auto-invite failed",
       );
     }
 
@@ -548,7 +550,7 @@ const driverSignupStart = async ({ name, phone, email, password }) => {
 
   const otp = generateOTP();
 
-  console.log("OTP", otp);
+  logger.info({ otp: "[REDACTED]" }, "Driver signup OTP generated");
 
   const otpHash = await bcrypt.hash(otp, 10);
 
@@ -716,6 +718,14 @@ const driverSignupDocuments = async ({
     );
   }
 
+  // T-1.1.1 in-flight PII parity — JWTs are signed not encrypted, so the
+  // base64 payload is readable by anyone holding the token. Encrypt the SSN
+  // inside the payload using the same AES-GCM envelope as the at-rest
+  // ciphertext (cryptoService). Downstream consumer is the User schema setter,
+  // which is idempotent on already-encrypted input, so the at-rest result is
+  // identical. Compliance class matches the SSN-at-rest gate.
+  const encryptedSsn = forHireLicense || !ssn ? null : cryptoService.encrypt(ssn);
+
   const docsToken = jwt.sign(
     {
       type: "driver_signup_docs",
@@ -723,7 +733,7 @@ const driverSignupDocuments = async ({
       email: decoded.email,
       name: decoded.name,
       hashedPassword: decoded.hashedPassword,
-      ssn: forHireLicense ? null : ssn,
+      ssn: encryptedSsn,
       vehicleTypes: parsedVehicleTypes,
       hasOwnVehicle: ownVehicle,
       hasForHireLicense: forHireLicense,
@@ -804,7 +814,7 @@ const driverSignupComplete = async ({
   const savedUser = await User.findById(saved._id);
 
   autoInviteDriverToCheckr(savedUser._id).catch((err) =>
-    console.error("Checkr auto-invite failed:", err?.message),
+    logger.error({ err: err?.message }, "Checkr auto-invite failed"),
   );
 
   const UserService = require("./userService");

@@ -6,6 +6,7 @@ const {
   sendError,
   sendValidationError,
 } = require("../utils/responseHelper");
+const logger = require("../utils/logger");
 
 
 
@@ -20,7 +21,7 @@ const driverSignupStart = asyncHandler(async (req, res) => {
     });
     return sendSuccess(res, 200, "Verification code sent to your phone", data);
   } catch (error) {
-    console.error("Driver Signup Start Error:", error);
+    (req.log || logger).error({ err: error }, "Driver Signup Start Error");
     if (error.statusCode === 400)
       return sendValidationError(res, error.message);
     return sendError(res, error.statusCode || 500, error.message);
@@ -53,7 +54,7 @@ const driverSignupDocuments = asyncHandler(async (req, res) => {
     return sendSuccess(res, 200, "Documents uploaded successfully", data);
   } catch (error) {
     // Log only message (not full error/stack) — the request body contains SSN
-    console.error("Driver Signup Documents Error:", error?.message || "unknown error");
+    (req.log || logger).error({ err: error?.message || "unknown error" }, "Driver Signup Documents Error");
     if (error.statusCode === 400)
       return sendValidationError(res, error.message);
     return sendError(res, error.statusCode || 500, error.message);
@@ -84,7 +85,7 @@ const driverSignupComplete = asyncHandler(async (req, res) => {
       user,
     });
   } catch (error) {
-    console.error("Driver Signup Complete Error:", error);
+    (req.log || logger).error({ err: error }, "Driver Signup Complete Error");
     if (error.statusCode === 400)
       return sendValidationError(res, error.message);
     return sendError(res, error.statusCode || 500, error.message);

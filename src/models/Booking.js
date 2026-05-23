@@ -63,9 +63,28 @@ const bookingSchema = new mongoose.Schema({
   subscriptionPrice: { type: Number },
   finalPrice: { type: Number, required: true },
   savings: { type: Number, default: 0 },
+  // Add-on cost is persisted per booking so payout can exclude it from the
+  // tier-percentage base. See phase2_notes.docx ("Add-ons = 100% company revenue").
+  addOnsCost: { type: Number, default: 0 },
+  // Tier-rate base actually used at payout time, sealed when payout is computed.
+  payoutBaseCents: { type: Number, default: null },
+  // Vehicle/equipment deduction applied to driver payout (S-Tier only today).
+  payoutDeductionCents: { type: Number, default: 0 },
+  // Persisted breakdown of late-night vs standard hours (informational; pricing
+  // function recomputes from the trip window so the field is for audit only).
+  lateNightHours: { type: Number, default: 0 },
 
   addOns: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AddOn' }],
   freeRouting: { type: Boolean, default: false },
+
+  // Same-day engine fields (T-2.4.1). Both default false so legacy bookings
+  // remain unaffected; engine is gated behind the SAME_DAY_ENGINE feature flag.
+  sameDay: { type: Boolean, default: false },
+  priorityClass: {
+    type: String,
+    enum: ['same-day-diamond', 'same-day-select-pro', 'advance-s-tier', 'advance-pro-diamond', 'admin-assigned', null],
+    default: null,
+  },
 
   status: { type: String, enum: ['Pending', 'Confirmed', 'Cancelled', 'Completed', 'In Progress', 'Expired'], default: 'Pending' },
   bookingDate: { type: Date, default: Date.now },
