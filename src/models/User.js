@@ -93,6 +93,10 @@ const userSchema = new mongoose.Schema(
       vehicleImage: { type: String, default: null },
       forHireLicenseImage: { type: String, default: null },
       driverRating: { type: Number, default: 0 },
+      // Post-acceptance cancellation tracking. Per spec, ratings/visibility/
+      // penalties are derived from these counters via admin settings.
+      cancellationCount: { type: Number, default: 0 },
+      lastCancellationAt: { type: Date, default: null },
       hasForHireLicense: { type: Boolean, default: false },
       hasOwnVehicle: { type: Boolean, default: false },
       authorizeBackgroundCheck: { type: Boolean, default: false },

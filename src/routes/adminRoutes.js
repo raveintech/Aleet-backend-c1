@@ -1,5 +1,5 @@
 const express = require('express');
-const { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, autoAssignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard } = require('../controllers/adminController');
+const { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, autoAssignDriverToBooking, redispatchBooking, unassignDriverFromBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard } = require('../controllers/adminController');
 const { getDriverTierPerformance, getTierSettings, updateTierSettings } = require('../controllers/tierController');
 const authenticateJWT = require('../middleware/authMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
@@ -12,6 +12,8 @@ router.patch('/toggleDriverStatus', requireAdmin, requirePermission('manage-user
 router.patch('/assignDriver', requireAdmin, requirePermission('manage-bookings'), assignDriverToBooking);
 router.get('/bookings/:id/eligible-drivers', requireAdmin, requirePermission('manage-bookings'), getEligibleDriversForBooking);
 router.post('/bookings/:id/auto-assign', requireAdmin, requirePermission('manage-bookings'), autoAssignDriverToBooking);
+router.post('/bookings/:id/redispatch', requireAdmin, requirePermission('manage-bookings'), redispatchBooking);
+router.patch('/bookings/:id/unassign', requireAdmin, requirePermission('manage-bookings'), unassignDriverFromBooking);
 
 // Driver listing & licensing
 router.get('/drivers', requireAdmin, requirePermission('manage-users'), getAllDrivers);
