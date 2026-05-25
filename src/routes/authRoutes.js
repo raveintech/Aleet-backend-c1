@@ -13,7 +13,6 @@ const {
   driverSignupStart,
   driverSignupDocuments,
   driverSignupComplete,
-  verifyDriverSignupOTPController,
 } = require("../controllers/driverAuthController");
 const {
   uploadDriverDocuments,
@@ -35,26 +34,20 @@ router.post(
   signupComplete,
 ); // 4. Name + email → JWT
 
-// ── Driver signup flow ────────────────────────────────────────────────────────
-router.post("/driver/signup/start", driverSignupStart); // 1. name + phone + email + password → OTP
-// Step 2 is shared: POST /signup/verify (returns driverToken for driver_signup purpose)
+// ── Driver signup flow (no SMS/OTP — verification is via documents + Checkr) ──
+router.post("/driver/signup/start", driverSignupStart); // 1. name + phone + email + password → driverToken
 router.post(
   "/driver/signup/documents",
   uploadDriverDocuments,
   handleUploadError,
   driverSignupDocuments,
-); // 3. ssn + vehicleTypes + images → docsToken
+); // 2. ssn + vehicleTypes + images → docsToken
 router.post(
   "/driver/signup/complete",
   uploadDriverComplete,
   handleUploadError,
   driverSignupComplete,
-); // 4. license consent → JWT
-
-router.post(
-  "/driver/signup/verify-otp",
-  verifyDriverSignupOTPController,
-);
+); // 3. license consent → JWT
 
 // ── Common ────────────────────────────────────────────────────────────────────
 router.post("/password/forgot", forgotPassword);

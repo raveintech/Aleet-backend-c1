@@ -18,7 +18,7 @@ const driverSignupStart = asyncHandler(async (req, res) => {
       email,
       password,
     });
-    return sendSuccess(res, 200, "Verification code sent to your phone", data);
+    return sendSuccess(res, 200, "Driver signup started — proceed to upload documents", data);
   } catch (error) {
     console.error("Driver Signup Start Error:", error);
     if (error.statusCode === 400)
@@ -26,16 +26,6 @@ const driverSignupStart = asyncHandler(async (req, res) => {
     return sendError(res, error.statusCode || 500, error.message);
   }
 });
-
-const verifyDriverSignupOTPController = async (req, res, next) => {
-  try {
-    const result = await AuthService.verifyDriverSignupOTP(req.body);
-
-    return res.status(200).json(result);
-  } catch (error) {
-    next(error);
-  }
-};
 
 const driverSignupDocuments = asyncHandler(async (req, res) => {
   try {
@@ -93,7 +83,6 @@ const driverSignupComplete = asyncHandler(async (req, res) => {
 
 module.exports = {
   driverSignupStart,
-  verifyDriverSignupOTPController,
   driverSignupDocuments,
   driverSignupComplete,
 };

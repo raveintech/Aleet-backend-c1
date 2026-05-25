@@ -530,119 +530,23 @@ const driverSignupStart = async ({ name, phone, email, password }) => {
     );
   }
 
-  const existingOTP = await PhoneOTP.findOne({
-    phone: normalizedPhone,
-  });
-
-  if (
-    existingOTP?.resendBlockedUntil &&
-    existingOTP.resendBlockedUntil > new Date()
-  ) {
-    throw new AuthServiceError(
-      "Please wait before requesting another OTP",
-      429,
-    );
-  }
-
   const hashedPassword = await bcrypt.hash(String(password), 10);
 
-  const otp = generateOTP();
-
-  console.log("OTP", otp);
-
-  const otpHash = await bcrypt.hash(otp, 10);
-
-  await PhoneOTP.findOneAndUpdate(
-    { phone: normalizedPhone },
+  // Drivers are verified through document review + background check, not SMS.
+  // Issue the driverToken directly so the next step is the documents upload.
+  const driverToken = jwt.sign(
     {
-      otpHash,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      attempts: 0,
-      resendBlockedUntil: new Date(Date.now() + 30 * 1000),
-    },
-    {
-      upsert: true,
-      new: true,
-    },
-  );
-
-  await sendOTP(normalizedPhone, otp);
-
-  const signupToken = jwt.sign(
-    {
-      type: "driver_signup_pending",
+      type: "driver_signup_verified",
       phone: normalizedPhone,
       email: normalizedEmail,
       name: String(name).trim(),
       hashedPassword,
     },
     process.env.JWT_SECRET,
-    {
-      expiresIn: "15m",
-    },
+    { expiresIn: "30m" },
   );
 
-  return {
-    signupToken,
-  };
-};
-
-const verifyDriverSignupOTP = async ({ signupToken, otpCode }) => {
-  const decoded = jwt.verify(signupToken, process.env.JWT_SECRET);
-  if (decoded.type !== "driver_signup_pending") {
-    throw new AuthServiceError("Invalid signup token type", 401);
-  }
-
-  const otpRecord = await PhoneOTP.findOne({
-    phone: decoded.phone,
-  });
-
-  if (!otpRecord) {
-    throw new AuthServiceError("OTP not found", 404);
-  }
-
-  if (otpRecord.expiresAt < new Date()) {
-    await PhoneOTP.deleteOne({ phone: decoded.phone });
-
-    throw new AuthServiceError("OTP expired", 401);
-  }
-
-  if (otpRecord.attempts >= 5) {
-    throw new AuthServiceError(
-      "Too many failed attempts. Request a new OTP.",
-      429,
-    );
-  }
-
-  const isValidOTP = await bcrypt.compare(String(otpCode), otpRecord.otpHash);
-
-  if (!isValidOTP) {
-    otpRecord.attempts += 1;
-
-    await otpRecord.save();
-
-    throw new AuthServiceError("Invalid OTP code", 401);
-  }
-
-  await PhoneOTP.deleteOne({ phone: decoded.phone });
-
-  const driverToken = jwt.sign(
-    {
-      type: "driver_signup_verified",
-      phone: decoded.phone,
-      email: decoded.email,
-      name: decoded.name,
-      hashedPassword: decoded.hashedPassword,
-    },
-    process.env.JWT_SECRET,
-    {
-      expiresIn: "30m",
-    },
-  );
-
-  return {
-    driverToken,
-  };
+  return { driverToken };
 };
 
 const driverSignupDocuments = async ({
@@ -821,7 +725,6 @@ module.exports = {
   forgotPassword,
   resetPassword,
   driverSignupStart,
-  verifyDriverSignupOTP,
   driverSignupDocuments,
   driverSignupComplete,
 };
