@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const { sendSuccess, sendError, sendValidationError, sendNotFound, sendForbidden, sendConflict } = require('../utils/responseHelper');
 const { fileUrl } = require('../utils/multer');
 const { resolveDriverTier } = require('../services/driverTierService');
-const { evaluateDriver, getRankedDriversForBooking, autoAssignDriver } = require('../services/dispatchService');
+const { evaluateDriver, getRankedDriversForBooking, autoAssignDriver, autoDispatchBooking } = require('../services/dispatchService');
 const { sendTripAlert, formatTripTime } = require('../services/twilioService');
 
 
@@ -127,6 +127,102 @@ const autoAssignDriverToBooking = async (req, res) => {
   } catch (error) {
     console.error('Auto-Assign Driver Error:', error);
     return sendError(res, 500, error.message || 'Failed to auto-assign driver');
+  }
+};
+
+// POST /api/admin/bookings/:id/redispatch
+// Admin re-runs the auto-dispatch offer flow on a Pending booking — used after
+// a driver cancels, an offer expires without acceptance, or the admin clears
+// the previous driver and wants the system to find a new one.
+const redispatchBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const booking = await Booking.findById(id);
+    if (!booking) return sendNotFound(res, 'Booking not found');
+
+    if (['Completed', 'Cancelled', 'Expired'].includes(booking.status)) {
+      return sendValidationError(res, `Cannot re-dispatch a ${booking.status.toLowerCase()} booking`);
+    }
+    if (booking.assignedDriver) {
+      return sendValidationError(res, 'Booking already has an assigned driver — unassign first');
+    }
+
+    const { drivers, stage, tiers } = await autoDispatchBooking(booking);
+
+    // Fire-and-forget SMS to the offer recipients
+    (async () => {
+      try {
+        const when = formatTripTime(booking.dates?.startDate);
+        for (const driver of drivers) {
+          sendTripAlert(driver, 'driver_trip_offer', {
+            when,
+            pickup: booking.pickupLocation,
+          }).catch(e => console.error('SMS driver_trip_offer failed:', e?.message));
+        }
+      } catch (e) {
+        console.error('Re-dispatch SMS fan-out failed:', e?.message || e);
+      }
+    })();
+
+    return sendSuccess(res, 200, 'Trip re-dispatched', {
+      stage,
+      tiers,
+      driversNotified: drivers.length,
+    });
+  } catch (error) {
+    console.error('Re-Dispatch Booking Error:', error);
+    return sendError(res, 500, error.message || 'Failed to re-dispatch booking');
+  }
+};
+
+// PATCH /api/admin/bookings/:id/unassign
+// Admin removes the currently-assigned driver and resets the booking to
+// Pending. Does NOT auto re-dispatch — the admin chooses whether to redispatch
+// or manually assign next.
+const unassignDriverFromBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+
+    const booking = await Booking.findById(id);
+    if (!booking) return sendNotFound(res, 'Booking not found');
+
+    if (['Completed', 'Cancelled', 'Expired'].includes(booking.status)) {
+      return sendValidationError(res, `Cannot unassign on a ${booking.status.toLowerCase()} booking`);
+    }
+    if (!booking.assignedDriver) {
+      return sendValidationError(res, 'Booking has no assigned driver');
+    }
+
+    const previousDriverId = booking.assignedDriver;
+
+    await Booking.updateOne(
+      { _id: id },
+      {
+        $set: {
+          assignedDriver: null,
+          status: 'Pending',
+          'offer.stage': 0,
+          'offer.offeredAt': null,
+          'offer.expiresAt': null,
+          'offer.tiers': [],
+          cancellation: {
+            cancelledBy: req.user.id,
+            cancelledAt: new Date(),
+            reason: reason || 'Unassigned by admin',
+          },
+        },
+      },
+    );
+
+    return sendSuccess(res, 200, 'Driver unassigned — booking is back to Pending', {
+      bookingId: id,
+      previousDriverId,
+      status: 'Pending',
+    });
+  } catch (error) {
+    console.error('Unassign Driver Error:', error);
+    return sendError(res, 500, error.message || 'Failed to unassign driver');
   }
 };
 
@@ -603,4 +699,4 @@ const getAdminDashboard = async (req, res) => {
   }
 };
 
-module.exports = { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, autoAssignDriverToBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard };
+module.exports = { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, autoAssignDriverToBooking, redispatchBooking, unassignDriverFromBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard };

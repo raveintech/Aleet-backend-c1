@@ -3,6 +3,8 @@ const {
     startBooking,
     confirmBooking,
     acceptBooking,
+    getOpenTrips,
+    driverCancelBooking,
     getAllBookings,
     getAdminBookingStats,
     getMyBookings,
@@ -23,6 +25,12 @@ router.post('/start', authenticateJWT, startBooking);
 
 // My bookings (authenticated user)
 router.get('/my', authenticateJWT, getMyBookings);
+
+// Driver — open trip offers matching the driver's tier + eligibility
+router.get('/open-trips', authenticateJWT, getOpenTrips);
+
+// Driver — cancel a booking they previously accepted (back to Pending)
+router.post('/driver-cancel', authenticateJWT, driverCancelBooking);
 
 // Admin — stats for top cards
 router.get('/stats', requireAdmin, requirePermission('view-reports'), getAdminBookingStats);

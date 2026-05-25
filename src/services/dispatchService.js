@@ -1,14 +1,22 @@
 // src/services/dispatchService.js
 // ---------------------------------------------------------------------------
-// Driver dispatch — eligibility evaluation + tier-priority ordering.
+// Driver dispatch — eligibility, ranking, and staged auto-dispatch.
 //
-// Used by the admin "assign driver" flow:
-//   - getRankedDriversForBooking → powers the eligible-driver picker
-//   - evaluateDriver             → the gate enforced when an admin assigns
-//   - autoAssignDriver           → picks the single best eligible driver
+// Two flows live here:
+//
+//   Auto-dispatch (primary)
+//     - autoDispatchBooking      → sends the trip offer to stage-1 drivers
+//     - escalateExpiredOffers    → bumps unanswered advance offers to stage 2
+//     - getEligibleDriversForStage / tiersForStage
+//
+//   Admin tools
+//     - getRankedDriversForBooking → eligible-driver picker
+//     - evaluateDriver             → the gate enforced when an admin assigns
+//     - autoAssignDriver           → one-shot "pick best driver" shortcut
 // ---------------------------------------------------------------------------
 
 const User = require('../models/User');
+const Booking = require('../models/Booking');
 
 // A booking is "same-day" when pickup is within the next 24 hours.
 // feat/availability-engine will later refine same-day detection.
@@ -162,6 +170,137 @@ async function autoAssignDriver(booking) {
   return { driver, sameDay, membershipTrip, candidates: drivers };
 }
 
+// ---------------------------------------------------------------------------
+// Staged auto-dispatch
+//
+// New bookings auto-emit a trip offer to the first eligible tier:
+//   - Same-day  → stage 1 = Diamond + Pro  (single stage; no escalation)
+//   - Advance   → stage 1 = S-Level only
+//                 stage 2 = Pro + Diamond  (after FIRST_STAGE_WINDOW_MS)
+//
+// The first driver to atomically claim the booking wins it. Drivers see open
+// offers via GET /api/bookings/open-trips (filtered by their tier against
+// booking.offer.tiers).
+// ---------------------------------------------------------------------------
+
+// Stage-1 window for advance bookings. If no S-Level accepts within this,
+// escalateExpiredOffers bumps the offer to Pro + Diamond.
+const FIRST_STAGE_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Tiers eligible to receive the offer at the given dispatch stage.
+ * Same-day bookings have a single stage. Advance bookings escalate.
+ */
+function tiersForStage(sameDay, stage) {
+  if (sameDay) return stage === 1 ? ['Diamond', 'Pro'] : [];
+  if (stage === 1) return ['S-Level'];
+  if (stage === 2) return ['Diamond', 'Pro'];
+  return [];
+}
+
+/**
+ * Find approved drivers whose tier qualifies for the given stage AND who pass
+ * the full booking-eligibility gate (vehicle, region, membership).
+ */
+async function getEligibleDriversForStage(booking, stage) {
+  const sameDay = isSameDayBooking(booking);
+  const tiers = tiersForStage(sameDay, stage);
+  if (tiers.length === 0) return [];
+
+  const drivers = await User.find({
+    role: 'driver',
+    'driver.status': 'approved',
+    'driver.tier': { $in: tiers },
+  });
+
+  return drivers.filter((d) => evaluateDriver(d, booking).eligible);
+}
+
+/**
+ * Persist the offer for the given stage on the booking and return the drivers
+ * who should be notified. Caller is responsible for firing SMS (so failures
+ * there don't roll back the offer state).
+ */
+async function sendOfferForStage(booking, stage) {
+  const sameDay = isSameDayBooking(booking);
+  const tiers = tiersForStage(sameDay, stage);
+  if (tiers.length === 0) {
+    return { drivers: [], stage, tiers, sameDay };
+  }
+
+  const drivers = await getEligibleDriversForStage(booking, stage);
+  const driverIds = drivers.map((d) => d._id);
+  const prevOffered = (booking.offer && booking.offer.offeredTo) || [];
+  const seen = new Set(prevOffered.map(String));
+  const mergedOfferedTo = [...prevOffered];
+  for (const id of driverIds) {
+    if (!seen.has(String(id))) {
+      mergedOfferedTo.push(id);
+      seen.add(String(id));
+    }
+  }
+
+  booking.offer = {
+    stage,
+    offeredAt: new Date(),
+    expiresAt: new Date(Date.now() + FIRST_STAGE_WINDOW_MS),
+    tiers,
+    offeredTo: mergedOfferedTo,
+  };
+  await booking.save();
+
+  return { drivers, stage, tiers, sameDay };
+}
+
+/**
+ * Kick off auto-dispatch for a newly-created (or re-dispatched) booking.
+ * Returns the eligible drivers so the caller can SMS them.
+ */
+async function autoDispatchBooking(booking) {
+  return sendOfferForStage(booking, 1);
+}
+
+/**
+ * Escalate a single booking from stage 1 → stage 2 if its window has expired
+ * and it's still unaccepted. No-op for same-day (single stage) and bookings
+ * that already have a driver.
+ */
+async function escalateOfferIfNeeded(bookingId) {
+  const booking = await Booking.findById(bookingId);
+  if (!booking) return null;
+  if (booking.assignedDriver) return null;
+  if (booking.status !== 'Pending') return null;
+  if (isSameDayBooking(booking)) return null;
+  if (!booking.offer || booking.offer.stage !== 1) return null;
+  if (!booking.offer.expiresAt || booking.offer.expiresAt > new Date()) return null;
+
+  return sendOfferForStage(booking, 2);
+}
+
+/**
+ * Periodic sweep — finds all stage-1 advance offers past their expiry and
+ * escalates them. Returns the count of bookings that were escalated.
+ */
+async function escalateExpiredOffers() {
+  const candidates = await Booking.find({
+    status: 'Pending',
+    assignedDriver: null,
+    'offer.stage': 1,
+    'offer.expiresAt': { $lte: new Date() },
+  }).select('_id');
+
+  let escalated = 0;
+  for (const { _id } of candidates) {
+    try {
+      const result = await escalateOfferIfNeeded(_id);
+      if (result && result.tiers.length > 0) escalated += 1;
+    } catch (e) {
+      console.error('Escalation failed for booking', String(_id), e?.message || e);
+    }
+  }
+  return escalated;
+}
+
 module.exports = {
   evaluateDriver,
   getRankedDriversForBooking,
@@ -170,4 +309,12 @@ module.exports = {
   isMembershipTrip,
   isSelectPro,
   SELECT_PRO_MIN_RATING,
+  // Staged auto-dispatch
+  autoDispatchBooking,
+  sendOfferForStage,
+  escalateOfferIfNeeded,
+  escalateExpiredOffers,
+  tiersForStage,
+  getEligibleDriversForStage,
+  FIRST_STAGE_WINDOW_MS,
 };

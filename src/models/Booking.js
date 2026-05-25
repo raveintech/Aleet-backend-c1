@@ -74,6 +74,26 @@ const bookingSchema = new mongoose.Schema({
   adminOverride: { type: Boolean, default: false },
   dispatchFlag: { type: Boolean, default: false }, // triggers internal dispatch review
 
+  // Trip-offer state — tracks staged auto-dispatch.
+  // Same-day: stage 1 = Diamond + Pro (single stage).
+  // Advance:  stage 1 = S-Level, stage 2 = Pro + Diamond (escalates after window).
+  // stage 0 means "no active offer" (booking is fresh, taken, or done).
+  offer: {
+    stage: { type: Number, default: 0 },
+    offeredAt: { type: Date, default: null },
+    expiresAt: { type: Date, default: null },
+    tiers: [{ type: String }],
+    offeredTo: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  },
+
+  // Driver cancellation — populated when an assigned driver cancels post-accept.
+  // Per-driver cancellation counters live on User.driver.cancellationCount.
+  cancellation: {
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    cancelledAt: { type: Date, default: null },
+    reason: { type: String, default: null },
+  },
+
   // Persisted validation report (for audit/ops)
   routeValidation: {
     legs: [routeLegSchema],

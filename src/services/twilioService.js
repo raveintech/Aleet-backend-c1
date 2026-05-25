@@ -173,6 +173,9 @@ const tripAlertTemplates = {
 
   driver_new_assignment: ({ when, pickup }) =>
     `Aleet: New trip assigned${when ? ` for ${when}` : ''}${pickup ? ` from ${pickup}` : ''}. Open the driver app to view details.`,
+
+  driver_trip_offer: ({ when, pickup }) =>
+    `Aleet: New trip available${when ? ` for ${when}` : ''}${pickup ? ` from ${pickup}` : ''}. Open the driver app to accept — first come, first served.`,
 };
 
 /**

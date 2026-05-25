@@ -72,6 +72,16 @@ app.use('/api/regions', regionRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
+// Dispatch escalation sweep — every minute, escalate unanswered stage-1 trip
+// offers (advance bookings) to stage 2 (Pro + Diamond). Same-day offers have a
+// single stage so they aren't touched here.
+const { escalateExpiredOffers } = require('./services/dispatchService');
+setInterval(() => {
+  escalateExpiredOffers().catch((e) => {
+    console.error('Escalation sweep error:', e?.message || e);
+  });
+}, 60 * 1000);
+
 // Start server
 const PORT = process.env.PORT;
 app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
