@@ -252,8 +252,19 @@ async function validateItinerary(itin, { bufferMinutes = 15 } = {}) {
 // Pricing
 // ---------------------------------------------------------------------------
 
+// Flat hourly rate that applies to every "subscriber" (= Membership) booking,
+// regardless of vehicle type. Per spec: "Membership: $89/hr — all vehicle types".
+// Founder 30's $69/hr rate and the 00:00–09:00 standard-rate carve-out are
+// follow-up changes; this constant will move into a `MembershipPricing`
+// model when those land so admins can adjust it without a deploy.
+const MEMBER_HOURLY_RATE = 89;
+
 /**
  * Calculate booking price for both regular and subscriber rates.
+ *
+ * Subscribers pay the flat MEMBER_HOURLY_RATE for any vehicle type. The
+ * previous "5 free hours + 10 % discount" model is retired — the quarterly
+ * hour pool (separate change) is the replacement for prepaid-hour mechanics.
  *
  * @param {{
  *   vehicleType,
@@ -261,7 +272,7 @@ async function validateItinerary(itin, { bufferMinutes = 15 } = {}) {
  *   addOns: ObjectId[],       // top-level booking add-on IDs
  *   stops?: Array<{ addOnIds?: ObjectId[] }>,  // per-stop add-on IDs
  *   isSubscriber,
- *   usedHours,
+ *   usedHours,                // legacy — kept for API compatibility; unused now
  *   bookingHours
  * }} params
  * @returns {Promise<{ regularPrice, subscriberPrice, breakdown }>}
@@ -272,6 +283,7 @@ async function calculateBookingPrice({
     addOns,
     stops,
     isSubscriber,
+    // eslint-disable-next-line no-unused-vars
     usedHours,
     bookingHours
 }) {
@@ -298,30 +310,27 @@ async function calculateBookingPrice({
 
     const addOnsCost = paidAddOns.reduce((sum, a) => sum + (a.price || 0), 0);
 
-    let regularPrice = totalBookedHours * baseRate + addOnsCost;
-    let subscriberPrice = regularPrice;
-
-    let freeHoursLeft = Math.max(0, 5 - (usedHours || 0));
-    let freeHoursUsed = 0;
-
-    if (isSubscriber) {
-        freeHoursUsed = Math.min(totalBookedHours, freeHoursLeft);
-        const billableHours = Math.max(0, totalBookedHours - freeHoursLeft);
-        subscriberPrice = billableHours * baseRate * 0.9 + addOnsCost; // 10% off after free hours
-    }
+    const regularPrice = totalBookedHours * baseRate + addOnsCost;
+    const subscriberPrice = isSubscriber
+        ? totalBookedHours * MEMBER_HOURLY_RATE + addOnsCost
+        : regularPrice;
 
     return {
         regularPrice: Number(regularPrice.toFixed(2)),
         subscriberPrice: Number(subscriberPrice.toFixed(2)),
         breakdown: {
             baseRate,
+            memberRate: isSubscriber ? MEMBER_HOURLY_RATE : null,
             hours,
             qty,
             addOnsCost: Number(addOnsCost.toFixed(2)),
             paidAddOns,
             freeAddOns,
-            freeHoursUsed,
-            freeHoursLeft: isSubscriber ? Math.max(0, freeHoursLeft - totalBookedHours) : 0
+            // freeHoursUsed/freeHoursLeft are zeroed out — kept in the payload
+            // only so old clients don't blow up. The quarterly hour pool
+            // replaces these in a follow-up change.
+            freeHoursUsed: 0,
+            freeHoursLeft: 0
         }
     };
 }
