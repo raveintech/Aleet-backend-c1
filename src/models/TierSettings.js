@@ -12,6 +12,8 @@ const tierConfigSchema = new mongoose.Schema({
 
 const tierSettingsSchema = new mongoose.Schema({
     bookingFee: { type: Number, default: 34 }, // admin-adjustable, applied per trip
+    membershipRate: { type: Number, default: 89 }, // locked $/hr for standard members (any vehicle type)
+    founder30Rate: { type: Number, default: 69 },  // locked $/hr for invite-only Founder 30 members
     tiers: {
         'S-Level': {
             type: tierConfigSchema,

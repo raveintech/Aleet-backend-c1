@@ -34,9 +34,13 @@ const userSchema = new mongoose.Schema(
       default: "non-subscriber",
     },
 
+    // Membership invite gate — only an admin-invited user may hold the
+    // private Founder 30 plan ($69/hr). Non-invited users cannot self-select it.
+    founder30Invited: { type: Boolean, default: false },
+
     // Subscription details
     subscriptionDetails: {
-      plan: { type: String, default: null },
+      plan: { type: String, default: null }, // e.g. 'membership' | 'founder30'
       price: { type: Number, default: null },
       billingCycle: { type: String, default: null },
       startDate: { type: Date, default: null },
@@ -47,7 +51,6 @@ const userSchema = new mongoose.Schema(
       stripePaymentIntentId: { type: String, default: null },
       isActive: { type: Boolean, default: false },
       monthlyHoursIncluded: { type: Number, default: 0 },
-      discountRate: { type: Number, default: 1.0 },
       cancelledAt: { type: Date, default: null },
       cancellationReason: { type: String, default: null },
       updatedAt: { type: Date, default: null },
