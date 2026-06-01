@@ -5,8 +5,9 @@
 // Two flows live here:
 //
 //   Auto-dispatch (primary)
-//     - autoDispatchBooking      → sends the trip offer to stage-1 drivers
-//     - escalateExpiredOffers    → bumps unanswered advance offers to stage 2
+//     - autoDispatchBooking      → sends the trip offer to eligible drivers
+//     - escalateExpiredOffers    → no-op for new bookings (single-stage); kept
+//                                  to clear any legacy stage-1 advance offers
 //     - getEligibleDriversForStage / tiersForStage
 //
 //   Admin tools
@@ -183,19 +184,27 @@ async function autoAssignDriver(booking) {
 // booking.offer.tiers).
 // ---------------------------------------------------------------------------
 
-// Stage-1 window for advance bookings. If no S-Level accepts within this,
-// escalateExpiredOffers bumps the offer to Pro + Diamond.
+// Offer TTL — kept so booking.offer.expiresAt has a sensible window for any
+// future re-dispatch / cleanup logic. Both same-day and advance now use a
+// single stage so escalation no longer fires (escalateExpiredOffers is a
+// no-op for new bookings — it stays in place for legacy stage-1 records).
 const FIRST_STAGE_WINDOW_MS = 10 * 60 * 1000;
 
 /**
  * Tiers eligible to receive the offer at the given dispatch stage.
- * Same-day bookings have a single stage. Advance bookings escalate.
+ *
+ * Per spec — both flows fire in a single stage:
+ *   - Same-day  → Diamond + Pro       (S-Level uses company vehicles, not
+ *                                      available on short notice)
+ *   - Advance   → S-Level + Pro + Diamond (all three see it together;
+ *                                      first eligible driver to accept wins)
+ *
+ * Stage 2 is retired but kept returning [] for back-compat with any in-flight
+ * legacy bookings that already advanced past stage 1.
  */
 function tiersForStage(sameDay, stage) {
-  if (sameDay) return stage === 1 ? ['Diamond', 'Pro'] : [];
-  if (stage === 1) return ['S-Level'];
-  if (stage === 2) return ['Diamond', 'Pro'];
-  return [];
+  if (stage !== 1) return [];
+  return sameDay ? ['Diamond', 'Pro'] : ['S-Level', 'Pro', 'Diamond'];
 }
 
 /**
