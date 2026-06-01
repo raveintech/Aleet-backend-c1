@@ -43,8 +43,8 @@ const createSubscriptionCheckout = asyncHandler(async (req, res) => {
           price_data: {
             currency: CURRENCY,
             product_data: {
-              name: 'Swift Haven Premium Subscription',
-              description: 'Quarterly subscription: $449/month billed quarterly at $1,347. Includes 5 free hours per month and 10% discount on all bookings.'
+              name: 'Aleet Membership',
+              description: 'Membership billed quarterly. Includes 5 prepaid driving hours per month at a locked $89/hr (any vehicle type).'
             },
             unit_amount: 134700, // $1,347 in cents
           },
@@ -100,7 +100,6 @@ const processSubscriptionPayment = asyncHandler(async (req, res) => {
       paymentMethodId: session.payment_intent?.id || null,
       isActive: true,
       monthlyHoursIncluded: 5,
-      discountRate: 0.9,
       stripeSessionId: sessionId,
       stripePaymentIntentId: session.payment_intent?.id || null
     };
@@ -115,7 +114,7 @@ const processSubscriptionPayment = asyncHandler(async (req, res) => {
     return sendSuccess(res, 200, 'Successfully subscribed to monthly plan', {
       user: updatedUser,
       subscription: subscriptionDetails,
-      message: 'Welcome to Swift Haven Premium! You now have 5 free hours per month and 10% discount on all bookings.'
+      message: 'Welcome to Aleet Membership! You now have 5 prepaid hours per month at a locked $89/hr on any vehicle type.'
     });
   } catch (error) {
     console.error('Process Subscription Payment Error:', error);
@@ -200,8 +199,8 @@ const getSubscriptionBenefits = asyncHandler(async (req, res) => {
         billingCycle: 'quarterly',
         totalQuarterly: 1347,
         benefits: [
-          '5 free hours per month',
-          '10% discount on all bookings',
+          '5 prepaid hours per month',
+          'Locked $89/hr on any vehicle type',
           'Priority customer support',
           'Free VIP add-ons',
           'No distance surcharge up to 20 miles',

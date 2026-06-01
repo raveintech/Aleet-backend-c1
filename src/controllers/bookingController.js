@@ -38,6 +38,7 @@ const {
   validateFinalBookingInput,
   buildItineraryFromBody,
   validateItinerary,
+  resolveMemberRate,
   calculateBookingPrice
 } = require('../utils/bookingHelpers');
 
@@ -233,8 +234,11 @@ const previewBooking = asyncHandler(async (req, res) => {
     const currentMonth = `${new Date(effectiveStartDate).getFullYear()}-${String(new Date(effectiveStartDate).getMonth() + 1).padStart(2, '0')}`;
     const monthlyHours = await MonthlyHours.findOne({ user: req.user.id, yearMonth: currentMonth }) || { totalHoursUsed: 0 };
 
+    const tierSettings = await TierSettings.findOne().lean();
+    const memberRate = resolveMemberRate(user, tierSettings);
+
     const { regularPrice, subscriberPrice, breakdown } = await calculateBookingPrice({
-      vehicleType, quantity, addOns: safeAddOnIds, isSubscriber,
+      vehicleType, quantity, addOns: safeAddOnIds, isSubscriber, memberRate,
       usedHours: monthlyHours.totalHoursUsed, bookingHours
     });
 
@@ -391,8 +395,11 @@ const startBooking = asyncHandler(async (req, res) => {
       monthlyHours = await MonthlyHours.create({ user: req.user.id, yearMonth: currentMonth, totalHoursUsed: 0 });
     }
 
+    const tierSettings = await TierSettings.findOne().lean();
+    const memberRate = resolveMemberRate(user, tierSettings);
+
     const { regularPrice, subscriberPrice, breakdown } = await calculateBookingPrice({
-      vehicleType, quantity, addOns: safeAddOnIds, stops: safeStops, isSubscriber,
+      vehicleType, quantity, addOns: safeAddOnIds, stops: safeStops, isSubscriber, memberRate,
       usedHours: monthlyHours.totalHoursUsed, bookingHours
     });
 

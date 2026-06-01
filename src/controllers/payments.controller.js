@@ -145,8 +145,7 @@ exports.webhook = async (req, res) => {
             stripeSessionId: fullSession.id,
             stripePaymentIntentId: fullSession.payment_intent?.id || null,
             isActive: true,
-            monthlyHoursIncluded: 5,
-            discountRate: 0.9
+            monthlyHoursIncluded: 5
           };
 
           await User.findByIdAndUpdate(userId, {

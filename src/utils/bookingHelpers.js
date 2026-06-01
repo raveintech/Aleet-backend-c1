@@ -253,6 +253,25 @@ async function validateItinerary(itin, { bufferMinutes = 15 } = {}) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Resolve the locked membership hourly rate for a user.
+ * Membership is a flat, vehicle-independent rate — NOT a percentage discount:
+ *   - Founder 30 (invite-only) members → settings.founder30Rate ($69)
+ *   - Standard members                 → settings.membershipRate ($89)
+ * Returns null for non-members so callers can fall back to the dynamic rate.
+ *
+ * @param {object} user      User document (needs subscriptionStatus + subscriptionDetails.plan)
+ * @param {object} [settings] TierSettings document (membershipRate, founder30Rate)
+ * @returns {number|null}
+ */
+function resolveMemberRate(user, settings) {
+    if (user?.subscriptionStatus !== 'subscriber') return null;
+    const isFounder = user?.subscriptionDetails?.plan === 'founder30';
+    const membershipRate = Number(settings?.membershipRate) || 89;
+    const founder30Rate = Number(settings?.founder30Rate) || 69;
+    return isFounder ? founder30Rate : membershipRate;
+}
+
+/**
  * Calculate booking price for both regular and subscriber rates.
  *
  * @param {{
@@ -261,6 +280,7 @@ async function validateItinerary(itin, { bufferMinutes = 15 } = {}) {
  *   addOns: ObjectId[],       // top-level booking add-on IDs
  *   stops?: Array<{ addOnIds?: ObjectId[] }>,  // per-stop add-on IDs
  *   isSubscriber,
+ *   memberRate,               // locked $/hr for members ($89 / $69); null for non-members
  *   usedHours,
  *   bookingHours
  * }} params
@@ -272,6 +292,7 @@ async function calculateBookingPrice({
     addOns,
     stops,
     isSubscriber,
+    memberRate,
     usedHours,
     bookingHours
 }) {
@@ -301,13 +322,18 @@ async function calculateBookingPrice({
     let regularPrice = totalBookedHours * baseRate + addOnsCost;
     let subscriberPrice = regularPrice;
 
+    // Locked membership rate ($89 standard / $69 Founder 30), applied to every
+    // booked hour regardless of vehicle type. Falls back to the dynamic vehicle
+    // rate only if a caller forgets to pass memberRate (defensive).
+    const lockedRate = Number(memberRate) > 0 ? Number(memberRate) : baseRate;
+
     let freeHoursLeft = Math.max(0, 5 - (usedHours || 0));
     let freeHoursUsed = 0;
 
     if (isSubscriber) {
         freeHoursUsed = Math.min(totalBookedHours, freeHoursLeft);
         const billableHours = Math.max(0, totalBookedHours - freeHoursLeft);
-        subscriberPrice = billableHours * baseRate * 0.9 + addOnsCost; // 10% off after free hours
+        subscriberPrice = billableHours * lockedRate + addOnsCost; // locked rate, no % discount
     }
 
     return {
@@ -315,6 +341,7 @@ async function calculateBookingPrice({
         subscriberPrice: Number(subscriberPrice.toFixed(2)),
         breakdown: {
             baseRate,
+            memberRate: isSubscriber ? lockedRate : null,
             hours,
             qty,
             addOnsCost: Number(addOnsCost.toFixed(2)),
@@ -333,5 +360,6 @@ module.exports = {
     validateFinalBookingInput,
     buildItineraryFromBody,
     validateItinerary,
+    resolveMemberRate,
     calculateBookingPrice
 };
