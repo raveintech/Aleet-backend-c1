@@ -6,8 +6,14 @@ const PaymentsController = require('../controllers/payments.controller');
 
 // Create Checkout Session
 router.post('/checkout-session', authenticateJWT, PaymentsController.createCheckoutSession);
+router.post('/webhook',express.raw({ type: 'application/json' }),PaymentsController.webhook);
 
 // (Optional) verify a session from frontend success page
 router.get('/session/:sessionId',  PaymentsController.getSessionStatus);
+
+// Saved cards — list, set default, remove
+router.get('/cards', authenticateJWT, PaymentsController.listSavedCards);
+router.post('/cards/:id/default', authenticateJWT, PaymentsController.setDefaultCard);
+router.delete('/cards/:id', authenticateJWT, PaymentsController.removeCard);
 
 module.exports = router;

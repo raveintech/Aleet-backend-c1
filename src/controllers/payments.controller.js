@@ -13,6 +13,25 @@ function toMinorUnits(amount) {
   return Math.round(Number(amount || 0) * 100);
 }
 
+/**
+ * Get the user's Stripe Customer ID, creating the Customer in Stripe (and
+ * persisting the ID) if one doesn't exist yet. Every saved-card / off-session
+ * charge flow needs this — Stripe Customers own the saved PaymentMethods.
+ */
+async function getOrCreateStripeCustomer(user) {
+  if (user.stripeCustomerId) return user.stripeCustomerId;
+
+  const customer = await stripe.customers.create({
+    email: user.email || undefined,
+    phone: user.phone || undefined,
+    name: user.name || undefined,
+    metadata: { userId: String(user._id) },
+  });
+
+  await User.findByIdAndUpdate(user._id, { stripeCustomerId: customer.id });
+  return customer.id;
+}
+
 exports.createCheckoutSession = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -35,14 +54,21 @@ exports.createCheckoutSession = async (req, res) => {
     if (totalAmount <= 0)
       return res.status(400).json({ success: false, message: 'Invalid amount' });
 
-    // 3) Get user email (optional)
+    // 3) Resolve the Stripe Customer (creates one on first checkout) so saved
+    //    cards have somewhere to live and Stripe Checkout can offer them next time.
     const user = await User.findById(userId);
+    const customerId = user ? await getOrCreateStripeCustomer(user) : null;
 
-    // 4) Create Checkout Session
+    // 4) Create Checkout Session — `setup_future_usage: off_session` tells
+    //    Stripe to attach the payment method to the customer after the charge,
+    //    enabling saved-card selection on future checkouts and (later) tap-to-book.
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
-      ...(user?.email ? { customer_email: user.email } : {}),
+      ...(customerId ? { customer: customerId } : (user?.email ? { customer_email: user.email } : {})),
+      payment_intent_data: {
+        setup_future_usage: 'off_session',
+      },
       metadata: {
         bookingId: booking._id.toString(),
         userId: userId.toString(),
@@ -124,6 +150,30 @@ exports.webhook = async (req, res) => {
           await booking.save();
           console.log('💾 Booking marked Paid:', bookingId);
         }
+
+        // Capture the card Stripe just saved (via setup_future_usage) so we
+        // can offer it for tap-to-book + membership overage charges later.
+        try {
+          const paymentIntent = fullSession.payment_intent && typeof fullSession.payment_intent === 'object'
+            ? await stripe.paymentIntents.retrieve(fullSession.payment_intent.id)
+            : null;
+          const pmId = paymentIntent?.payment_method;
+          const stripeCustomerId = fullSession.customer || null;
+          if (pmId && userId) {
+            const update = { stripeCustomerId: stripeCustomerId, defaultPaymentMethodId: pmId };
+            // Only seed `defaultPaymentMethodId` when the user doesn't have one,
+            // so a returning guest doesn't lose their preferred card.
+            const existing = await User.findById(userId).select('stripeCustomerId defaultPaymentMethodId').lean();
+            if (existing?.defaultPaymentMethodId) delete update.defaultPaymentMethodId;
+            if (existing?.stripeCustomerId) delete update.stripeCustomerId;
+            if (Object.keys(update).length > 0) {
+              await User.findByIdAndUpdate(userId, update);
+              console.log('💳 Saved card captured for user', userId, '→', pmId);
+            }
+          }
+        } catch (e) {
+          console.error('Saved-card capture failed:', e?.message || e);
+        }
       }
 
       // Handle subscription payments
@@ -179,6 +229,101 @@ exports.webhook = async (req, res) => {
   }
 };
 
+
+// ---------------------------------------------------------------------------
+// Saved cards — list, set default, remove. Cards are added implicitly by
+// booking checkout (setup_future_usage above); an explicit "add card outside
+// of booking" flow needs Stripe Elements + SetupIntents, which ships later.
+// ---------------------------------------------------------------------------
+
+/** Map a Stripe PaymentMethod to the trimmed shape the frontend renders. */
+function toSavedCardDTO(pm, defaultId) {
+  const card = pm?.card || {};
+  return {
+    id: pm.id,
+    brand: card.brand || 'card',
+    last4: card.last4 || '',
+    expMonth: card.exp_month || null,
+    expYear: card.exp_year || null,
+    isDefault: pm.id === defaultId,
+  };
+}
+
+/** GET /api/payments/cards — list the caller's saved cards. */
+exports.listSavedCards = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    if (!user.stripeCustomerId) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const methods = await stripe.paymentMethods.list({
+      customer: user.stripeCustomerId,
+      type: 'card',
+      limit: 20,
+    });
+
+    const cards = (methods.data || []).map((pm) => toSavedCardDTO(pm, user.defaultPaymentMethodId));
+    return res.status(200).json({ success: true, data: cards });
+  } catch (err) {
+    console.error('listSavedCards error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to list saved cards' });
+  }
+};
+
+/** DELETE /api/payments/cards/:id — detach a saved card from the customer. */
+exports.removeCard = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    if (!user.stripeCustomerId) {
+      return res.status(404).json({ success: false, message: 'No saved cards' });
+    }
+
+    const { id } = req.params;
+    // Sanity check — only allow detaching cards that belong to this customer.
+    const pm = await stripe.paymentMethods.retrieve(id);
+    if (pm.customer !== user.stripeCustomerId) {
+      return res.status(403).json({ success: false, message: 'Card does not belong to this user' });
+    }
+
+    await stripe.paymentMethods.detach(id);
+
+    // If we just removed the default, clear it so the next saved card can take over.
+    if (user.defaultPaymentMethodId === id) {
+      await User.findByIdAndUpdate(user._id, { defaultPaymentMethodId: null });
+    }
+
+    return res.status(200).json({ success: true, message: 'Card removed' });
+  } catch (err) {
+    console.error('removeCard error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to remove card' });
+  }
+};
+
+/** POST /api/payments/cards/:id/default — mark a saved card as the default. */
+exports.setDefaultCard = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    if (!user.stripeCustomerId) {
+      return res.status(404).json({ success: false, message: 'No saved cards' });
+    }
+
+    const { id } = req.params;
+    const pm = await stripe.paymentMethods.retrieve(id);
+    if (pm.customer !== user.stripeCustomerId) {
+      return res.status(403).json({ success: false, message: 'Card does not belong to this user' });
+    }
+
+    await User.findByIdAndUpdate(user._id, { defaultPaymentMethodId: id });
+    return res.status(200).json({ success: true, message: 'Default card updated' });
+  } catch (err) {
+    console.error('setDefaultCard error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to set default card' });
+  }
+};
 
 // Optional helper to verify a session from success page
 // controllers/payments.controller.js
