@@ -16,6 +16,7 @@ const Booking = require('../models/Booking');
 const User = require('../models/User');
 const VehicleType = require('../models/Vehicle');
 const MonthlyHours = require('../models/MonthlyHours');
+const MembershipBalance = require('../models/MembershipBalance');
 const TierSettings = require('../models/TierSettings');
 
 const { getPagination, getSorting, getSearchQuery } = require('../utils/queryHelper');
@@ -231,15 +232,26 @@ const previewBooking = asyncHandler(async (req, res) => {
       routeValidation = await validateItinerary(itinerary, { bufferMinutes: 15 });
     }
 
-    const currentMonth = `${new Date(effectiveStartDate).getFullYear()}-${String(new Date(effectiveStartDate).getMonth() + 1).padStart(2, '0')}`;
-    const monthlyHours = await MonthlyHours.findOne({ user: req.user.id, yearMonth: currentMonth }) || { totalHoursUsed: 0 };
-
     const tierSettings = await TierSettings.findOne().lean();
     const memberRate = resolveMemberRate(user, tierSettings);
 
+    // Read-only: member's remaining prepaid pool for the booking's quarter.
+    // Preview never creates/mutates the balance.
+    let prepaidHoursLeft = 0;
+    let membershipPool = null;
+    if (isSubscriber) {
+      const { year, quarter } = MembershipBalance.quarterOf(effectiveStartDate);
+      const hoursIncluded = (user.subscriptionDetails?.monthlyHoursIncluded || 5) * 3;
+      const bal = await MembershipBalance.findOne({ user: req.user.id, year, quarter }).lean();
+      const used = bal?.hoursUsed || 0;
+      const included = bal?.hoursIncluded ?? hoursIncluded;
+      prepaidHoursLeft = Math.max(0, included - used);
+      membershipPool = { year, quarter, hoursIncluded: included, hoursUsed: used, hoursRemaining: prepaidHoursLeft };
+    }
+
     const { regularPrice, subscriberPrice, breakdown } = await calculateBookingPrice({
       vehicleType, quantity, addOns: safeAddOnIds, isSubscriber, memberRate,
-      usedHours: monthlyHours.totalHoursUsed, bookingHours
+      prepaidHoursLeft, bookingHours
     });
 
     const { baseToPickupMiles, distanceSurcharge } = await resolveDistanceSurcharge(pickupLocation);
@@ -259,6 +271,7 @@ const previewBooking = asyncHandler(async (req, res) => {
       regularPrice: regTotal,
       subscriptionPrice: isSubscriber ? subTotal : undefined,
       total,
+      membership: membershipPool || undefined,
       breakdown: {
         ...breakdown,
         distance: buildDistanceBreakdown(baseToPickupMiles, distanceSurcharge)
@@ -398,14 +411,35 @@ const startBooking = asyncHandler(async (req, res) => {
     const tierSettings = await TierSettings.findOne().lean();
     const memberRate = resolveMemberRate(user, tierSettings);
 
+    // Quarterly prepaid pool — get-or-create for the booking's quarter.
+    let membershipBalance = null;
+    let prepaidHoursLeft = 0;
+    if (isSubscriber) {
+      const { year, quarter } = MembershipBalance.quarterOf(effectiveStartDate);
+      const hoursIncluded = (user.subscriptionDetails?.monthlyHoursIncluded || 5) * 3;
+      membershipBalance = await MembershipBalance.findOne({ user: req.user.id, year, quarter });
+      if (!membershipBalance) {
+        membershipBalance = await MembershipBalance.create({ user: req.user.id, year, quarter, hoursIncluded, hoursUsed: 0 });
+      }
+      prepaidHoursLeft = Math.max(0, membershipBalance.hoursIncluded - membershipBalance.hoursUsed);
+    }
+
     const { regularPrice, subscriberPrice, breakdown } = await calculateBookingPrice({
       vehicleType, quantity, addOns: safeAddOnIds, stops: safeStops, isSubscriber, memberRate,
-      usedHours: monthlyHours.totalHoursUsed, bookingHours
+      prepaidHoursLeft, bookingHours
     });
 
     const { baseToPickupMiles, distanceSurcharge } = await resolveDistanceSurcharge(pickupLocation);
 
+    // Deduct only the prepaid hours actually consumed (in-pool portion) from the
+    // quarterly balance; overage hours are billed, not deducted. Keep the legacy
+    // monthly counter updated for reporting.
     if (isSubscriber) {
+      const consumed = breakdown.prepaidHoursUsed || 0;
+      if (membershipBalance && consumed > 0) {
+        membershipBalance.hoursUsed += consumed;
+        await membershipBalance.save();
+      }
       monthlyHours.totalHoursUsed += bookingHours;
       await monthlyHours.save();
     }
@@ -414,6 +448,24 @@ const startBooking = asyncHandler(async (req, res) => {
     const adjustedSubscriber = Number((subscriberPrice + distanceSurcharge).toFixed(2));
     const finalPrice = isSubscriber ? adjustedSubscriber : adjustedRegular;
     const savings = isSubscriber ? Number((adjustedRegular - adjustedSubscriber).toFixed(2)) : 0;
+
+    // Overage auto-charge — overage is already part of finalPrice and charged via
+    // the normal checkout. Off-session "tap-to-book" auto-charge against a saved
+    // card is gated behind a flag until branch 6 (saved cards) lands.
+    const overageHours = breakdown.overageHours || 0;
+    const overageCost = breakdown.overageCost || 0;
+    if (isSubscriber && overageHours > 0) {
+      const canAutoCharge =
+        process.env.OVERAGE_AUTO_CHARGE === 'true' &&
+        user.subscriptionDetails?.stripeCustomerId &&
+        user.subscriptionDetails?.paymentMethodId;
+      if (canAutoCharge) {
+        // TODO(branch 6): create an off-session Stripe PaymentIntent for overageCost.
+        console.log(`[overage] would auto-charge $${overageCost} (${overageHours}h) to ${user.subscriptionDetails.stripeCustomerId}`);
+      } else {
+        console.log(`[overage] ${overageHours}h = $${overageCost} included in finalPrice (off-session auto-charge disabled)`);
+      }
+    }
 
     const booking = await Booking.create({
       user: req.user.id,
@@ -471,6 +523,16 @@ const startBooking = asyncHandler(async (req, res) => {
         regularTotal: adjustedRegular,
         subscriptionTotal: adjustedSubscriber + 449,
         savings: adjustedRegular - (adjustedSubscriber + 449)
+      } : undefined,
+      membership: isSubscriber && membershipBalance ? {
+        year: membershipBalance.year,
+        quarter: membershipBalance.quarter,
+        hoursIncluded: membershipBalance.hoursIncluded,
+        hoursUsed: membershipBalance.hoursUsed,
+        hoursRemaining: Math.max(0, membershipBalance.hoursIncluded - membershipBalance.hoursUsed),
+        prepaidHoursUsedThisTrip: breakdown.prepaidHoursUsed || 0,
+        overageHoursThisTrip: overageHours,
+        overageCostThisTrip: overageCost
       } : undefined,
       breakdown: {
         ...breakdown,

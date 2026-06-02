@@ -3,6 +3,7 @@ const Stripe = require('stripe');
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const User = require('../models/User');
 const MonthlyHours = require('../models/MonthlyHours');
+const MembershipBalance = require('../models/MembershipBalance');
 const {
   sendSuccess,
   sendError,
@@ -135,14 +136,29 @@ const getSubscriptionStatus = asyncHandler(async (req, res) => {
     const currentMonth = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
     const monthlyHours = await MonthlyHours.findOne({ user: userId, yearMonth: currentMonth });
 
+    // Quarterly prepaid pool — the authoritative balance for the current quarter.
+    const isSubscriber = user.subscriptionStatus === 'subscriber';
+    const { year, quarter } = MembershipBalance.quarterOf(currentDate);
+    const hoursIncludedDefault = (user.subscriptionDetails?.monthlyHoursIncluded || 5) * 3;
+    const balance = await MembershipBalance.findOne({ user: userId, year, quarter });
+    const hoursIncluded = balance?.hoursIncluded ?? hoursIncludedDefault;
+    const hoursUsed = balance?.hoursUsed || 0;
+
     const subscriptionInfo = {
       status: user.subscriptionStatus,
-      isSubscriber: user.subscriptionStatus === 'subscriber',
+      isSubscriber,
       subscriptionDetails: user.subscriptionDetails || null,
+      membershipBalance: {
+        year,
+        quarter,
+        hoursIncluded: isSubscriber ? hoursIncluded : 0,
+        hoursUsed: isSubscriber ? hoursUsed : 0,
+        hoursRemaining: isSubscriber ? Math.max(0, hoursIncluded - hoursUsed) : 0,
+        nextBillingDate: user.subscriptionDetails?.nextBillingDate || null
+      },
       currentMonthUsage: {
         yearMonth: currentMonth,
         hoursUsed: monthlyHours?.totalHoursUsed || 0,
-        hoursRemaining: user.subscriptionStatus === 'subscriber' ? Math.max(0, 5 - (monthlyHours?.totalHoursUsed || 0)) : 0,
         nextBillingDate: user.subscriptionDetails?.nextBillingDate || null
       }
     };

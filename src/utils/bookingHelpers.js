@@ -281,7 +281,7 @@ function resolveMemberRate(user, settings) {
  *   stops?: Array<{ addOnIds?: ObjectId[] }>,  // per-stop add-on IDs
  *   isSubscriber,
  *   memberRate,               // locked $/hr for members ($89 / $69); null for non-members
- *   usedHours,
+ *   prepaidHoursLeft,         // prepaid hours remaining in the member's quarterly pool
  *   bookingHours
  * }} params
  * @returns {Promise<{ regularPrice, subscriberPrice, breakdown }>}
@@ -293,7 +293,7 @@ async function calculateBookingPrice({
     stops,
     isSubscriber,
     memberRate,
-    usedHours,
+    prepaidHoursLeft,
     bookingHours
 }) {
     const baseRate = Number(vehicleType?.hourlyPrice || 0);
@@ -327,13 +327,16 @@ async function calculateBookingPrice({
     // rate only if a caller forgets to pass memberRate (defensive).
     const lockedRate = Number(memberRate) > 0 ? Number(memberRate) : baseRate;
 
-    let freeHoursLeft = Math.max(0, 5 - (usedHours || 0));
-    let freeHoursUsed = 0;
+    // Prepaid pool split: hours covered by the quarterly pool cost $0 (already
+    // prepaid); hours beyond the pool are overage, billed at the locked rate.
+    const prepaidLeft = Math.max(0, Number(prepaidHoursLeft) || 0);
+    let prepaidHoursUsed = 0;
+    let overageHours = 0;
 
     if (isSubscriber) {
-        freeHoursUsed = Math.min(totalBookedHours, freeHoursLeft);
-        const billableHours = Math.max(0, totalBookedHours - freeHoursLeft);
-        subscriberPrice = billableHours * lockedRate + addOnsCost; // locked rate, no % discount
+        prepaidHoursUsed = Math.min(totalBookedHours, prepaidLeft);
+        overageHours = Math.max(0, totalBookedHours - prepaidLeft);
+        subscriberPrice = overageHours * lockedRate + addOnsCost; // prepaid hours = $0, overage @ locked rate
     }
 
     return {
@@ -347,8 +350,13 @@ async function calculateBookingPrice({
             addOnsCost: Number(addOnsCost.toFixed(2)),
             paidAddOns,
             freeAddOns,
-            freeHoursUsed,
-            freeHoursLeft: isSubscriber ? Math.max(0, freeHoursLeft - totalBookedHours) : 0
+            prepaidHoursUsed,
+            overageHours,
+            overageCost: Number((overageHours * lockedRate).toFixed(2)),
+            prepaidHoursLeftAfter: isSubscriber ? Math.max(0, prepaidLeft - totalBookedHours) : 0,
+            // Back-compat aliases (frontend may still read these):
+            freeHoursUsed: prepaidHoursUsed,
+            freeHoursLeft: isSubscriber ? Math.max(0, prepaidLeft - totalBookedHours) : 0
         }
     };
 }

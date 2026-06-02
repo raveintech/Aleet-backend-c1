@@ -34,9 +34,19 @@ const userSchema = new mongoose.Schema(
       default: "non-subscriber",
     },
 
+
     // Membership invite gate — only an admin-invited user may hold the
     // private Founder 30 plan ($69/hr). Non-invited users cannot self-select it.
     founder30Invited: { type: Boolean, default: false },
+
+    // Top-level Stripe Customer ID — separate from subscriptionDetails so it
+    // applies to every saved card a guest has, not just membership billing.
+    // Populated on first booking checkout (see payments.controller.js).
+    stripeCustomerId: { type: String, default: null },
+    // Last card the guest used. Frontend lists this as "Default" and the
+    // tap-to-book / membership overage flows charge it off-session.
+    defaultPaymentMethodId: { type: String, default: null },
+
 
     // Subscription details
     subscriptionDetails: {
