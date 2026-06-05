@@ -530,21 +530,41 @@ const getDriverTrips = asyncHandler(async (req, res) => {
     const regionFilter =
       driver.driver?.serveAllRegions !== false ? {} : { region: { $in: driverRegions } };
 
-    // Vehicle-type binding: driver only sees trips for vehicles they're approved for.
-    // An empty vehicleTypes list yields { $in: [] } which matches nothing — that's
-    // intentional: a driver with no approved vehicles shouldn't see any trips.
+    // Vehicle-type binding — Pro / Diamond only see trips for vehicles they're
+    // approved for. S-Level drives Aleet's company vehicles and therefore has
+    // an empty driver.vehicleTypes; they're exempt from this filter (mirrors
+    // driverHasVehicleType in dispatchService.evaluateDriver). An empty
+    // vehicleTypes array on a Pro/Diamond driver still matches nothing —
+    // intentional, they must be approved on at least one vehicle to see trips.
     const driverVehicles = Array.isArray(driver.driver?.vehicleTypes)
       ? driver.driver.vehicleTypes
       : [];
-    const vehicleFilter = { vehicleType: { $in: driverVehicles } };
+    const vehicleFilter =
+      tier === 'S-Level' ? {} : { vehicleType: { $in: driverVehicles } };
 
     // ── Stats queries (parallel) ──────────────────────────────────────────────
+    // Tier-aware offer gate — only show trips whose auto-dispatched offer
+    // includes this driver's tier. Legacy bookings (created before auto-
+    // dispatch existed, or whose offer was cleared) have offer.stage 0 / no
+    // offer field; let those through so they remain visible until an admin
+    // re-dispatches them.
+    const offerGate = {
+      $or: [
+        { 'offer.tiers': tier },
+        { 'offer.stage': { $in: [0, null] } },
+        { 'offer.stage': { $exists: false } },
+      ],
+    };
+
     const availableFilter = {
       status: 'Pending',
       assignedDriver: null,
       ...membershipFilter,
       ...regionFilter,
       ...vehicleFilter,
+      // Nest the $or under $and so it composes with searchFilter's own $or
+      // (which gets spread into tripFilter below) without one overwriting the other.
+      $and: [offerGate],
     };
 
     const myTripsFilter = {

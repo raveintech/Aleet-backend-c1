@@ -31,12 +31,14 @@ const { computePayoutCents } = require('../services/payoutUtils');
 const { getMilesFromBase } = require('../services/googleRoutesService');
 const { getRegionSameDayStatus } = require('../services/availabilityService');
 const { sendTripAlertSMS, sendTripAlert, formatTripTime } = require('../services/twilioService');
+const { autoDispatchBooking, evaluateDriver } = require('../services/dispatchService');
 const {
   toId,
   validateBookingInput,
   validateFinalBookingInput,
   buildItineraryFromBody,
   validateItinerary,
+  resolveMemberRate,
   calculateBookingPrice
 } = require('../utils/bookingHelpers');
 
@@ -232,8 +234,11 @@ const previewBooking = asyncHandler(async (req, res) => {
     const currentMonth = `${new Date(effectiveStartDate).getFullYear()}-${String(new Date(effectiveStartDate).getMonth() + 1).padStart(2, '0')}`;
     const monthlyHours = await MonthlyHours.findOne({ user: req.user.id, yearMonth: currentMonth }) || { totalHoursUsed: 0 };
 
+    const tierSettings = await TierSettings.findOne().lean();
+    const memberRate = resolveMemberRate(user, tierSettings);
+
     const { regularPrice, subscriberPrice, breakdown } = await calculateBookingPrice({
-      vehicleType, quantity, addOns: safeAddOnIds, isSubscriber,
+      vehicleType, quantity, addOns: safeAddOnIds, isSubscriber, memberRate,
       usedHours: monthlyHours.totalHoursUsed, bookingHours
     });
 
@@ -390,8 +395,11 @@ const startBooking = asyncHandler(async (req, res) => {
       monthlyHours = await MonthlyHours.create({ user: req.user.id, yearMonth: currentMonth, totalHoursUsed: 0 });
     }
 
+    const tierSettings = await TierSettings.findOne().lean();
+    const memberRate = resolveMemberRate(user, tierSettings);
+
     const { regularPrice, subscriberPrice, breakdown } = await calculateBookingPrice({
-      vehicleType, quantity, addOns: safeAddOnIds, stops: safeStops, isSubscriber,
+      vehicleType, quantity, addOns: safeAddOnIds, stops: safeStops, isSubscriber, memberRate,
       usedHours: monthlyHours.totalHoursUsed, bookingHours
     });
 
@@ -439,6 +447,23 @@ const startBooking = asyncHandler(async (req, res) => {
     sendTripAlert(user, 'guest_booking_received', {
       when: formatTripTime(effectiveStartDate),
     }).catch(e => console.error('SMS guest_booking_received failed:', e?.message));
+
+    // Auto-dispatch — send the trip offer to the first eligible tier.
+    // Fire-and-forget: a dispatch failure must not break booking creation.
+    (async () => {
+      try {
+        const { drivers } = await autoDispatchBooking(booking);
+        const when = formatTripTime(effectiveStartDate);
+        for (const driver of drivers) {
+          sendTripAlert(driver, 'driver_trip_offer', {
+            when,
+            pickup: pickupLocation,
+          }).catch(e => console.error('SMS driver_trip_offer failed:', e?.message));
+        }
+      } catch (e) {
+        console.error('Auto-dispatch failed:', e?.message || e);
+      }
+    })();
 
     return sendSuccess(res, 201, 'Booking started successfully', {
       booking,
@@ -535,7 +560,11 @@ const confirmBooking = asyncHandler(async (req, res) => {
 
 /**
  * POST /api/bookings/accept
- * Driver accepts or declines a booking. Diamond tier gets instant payout.
+ * Driver accepts (or declines) an offered trip.
+ *
+ * Accept is race-safe — uses an atomic findOneAndUpdate so only one driver
+ * can win a contested booking; everyone else gets a "Trip already taken"
+ * 409. Decline is a soft no-op: the booking stays open for other drivers.
  */
 const acceptBooking = asyncHandler(async (req, res) => {
   try {
@@ -543,104 +572,206 @@ const acceptBooking = asyncHandler(async (req, res) => {
     const driverId = req.user.id;
 
     if (!bookingId || !action) return sendValidationError(res, 'Booking ID and action are required');
-
-    const booking = await Booking.findById(bookingId);
-    if (!booking) return sendNotFound(res, 'Booking not found');
-    if (booking.status === 'Confirmed') return sendValidationError(res, 'Booking already confirmed');
-
-    const driver = await User.findById(driverId);
-    if (!driver || driver.role !== 'driver') return sendValidationError(res, 'Invalid driver');
-    if (driver.driver?.status !== 'approved') return sendForbidden(res, 'Only active drivers can accept trips');
-
-    const driverVehicles = driver.driver?.vehicleTypes?.map(v => v.toString()) || [];
-    if (!driverVehicles.includes(booking.vehicleType.toString())) {
-      return sendValidationError(res, 'Driver lacks required vehicle type');
-    }
-
-    // Tier gate — membership trips can only be fulfilled by Pro / Diamond
-    if (action === 'accept' && isMembershipTrip(booking) && driver.driver?.tier === 'S-Level') {
-      return sendForbidden(res, 'Membership trips are restricted to Pro and Diamond drivers');
-    }
-
-    // Region gate — driver must serve the booking's region (default-open)
-    if (action === 'accept' && !driverServesRegion(driver, booking.region)) {
-      return sendForbidden(res, "This trip is outside the regions you serve");
-    }
-
-    if (action === 'accept') {
-      booking.status = 'Confirmed';
-      booking.assignedDriver = driverId;
-      await booking.save();
-
-      // Trip-alert SMS — notify guest the driver is on the way
-      try {
-        const guest = await User.findById(booking.user).select('phone').lean();
-        const tripWindow = formatTripWindow(booking.dates?.startDate);
-        if (guest?.phone) {
-          safeSendTripAlert(
-            guest.phone,
-            `Aleet: A driver has accepted your trip${tripWindow ? ` on ${tripWindow}` : ''}. Open the app to view details.`
-          );
-        }
-      } catch (e) {
-        console.error('⚠️ Guest trip-alert lookup failed:', e.message);
-      }
-
-      // Diamond Tier — Instant Payout
-      try {
-        if (driver.driver?.tier === 'Diamond') {
-          const BankAccount = require('../models/BankAccount');
-          const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-          const bank = await BankAccount.findOne({ driverId }).lean();
-          if (bank?.stripeAccountId && booking.paymentStatus === 'Paid' && !booking.PaidToDriver) {
-            const amountCents = computePayoutCents(booking);
-            if (amountCents > 0) {
-              const transfer = await stripe.transfers.create({
-                amount: amountCents,
-                currency: 'usd',
-                destination: bank.stripeAccountId,
-                transfer_group: `booking:${booking._id}`
-              });
-              await Booking.updateOne({ _id: booking._id }, { $set: { PaidToDriver: true, payoutTransferId: transfer.id } });
-              console.log(`💸 Instant payout $${(amountCents / 100).toFixed(2)} → Diamond driver ${driver._id}`);
-            }
-          }
-        }
-      } catch (e) {
-        console.error('⚠️ Instant payout failed:', e.message);
-      }
-
-    } else if (action === 'decline') {
-      booking.status = 'Cancelled';
-      booking.assignedDriver = null;
-      await booking.save();
-
-      // Notify guest of cancellation (fire-and-forget)
-      (async () => {
-        try {
-          const guest = await User.findById(booking.user);
-          if (guest) {
-            sendTripAlert(guest, 'guest_trip_cancelled', {})
-              .catch(e => console.error('SMS guest_trip_cancelled failed:', e?.message));
-          }
-        } catch (e) {
-          console.error('SMS decline dispatch failed:', e?.message);
-        }
-      })();
-    } else {
+    if (action !== 'accept' && action !== 'decline') {
       return sendValidationError(res, 'Invalid action. Must be "accept" or "decline"');
     }
 
-    // Driver-scoped DTO — hide guest pricing, expose payout only
-    if (req.user.role === 'driver') {
-      const settings = await TierSettings.findOne().lean();
-      return sendSuccess(res, 200, `Booking ${action}ed successfully`, toDriverBooking(booking, driver, settings));
+    const booking = await Booking.findById(bookingId);
+    if (!booking) return sendNotFound(res, 'Booking not found');
+
+    // Decline is soft — trip remains open for other eligible drivers in the offer pool
+    if (action === 'decline') {
+      return sendSuccess(res, 200, 'Trip declined — it will remain available to other drivers', {});
     }
 
-    return sendSuccess(res, 200, `Booking ${action}ed successfully`, booking);
+    // Pre-flight checks (informational; the atomic update below is the real gate)
+    if (booking.assignedDriver) return sendError(res, 409, 'Trip already taken');
+    if (booking.status !== 'Pending') {
+      return sendValidationError(res, `Booking is ${booking.status} and can no longer be accepted`);
+    }
+
+    const driver = await User.findById(driverId);
+    if (!driver || driver.role !== 'driver') return sendValidationError(res, 'Invalid driver');
+
+    const { eligible, reason } = evaluateDriver(driver, booking);
+    if (!eligible) return sendForbidden(res, reason || 'You are not eligible for this trip');
+
+    // Tier-stage gate — only drivers in the current offer's tier pool can accept.
+    // Older bookings (no offer state) skip the gate so legacy admin-confirm flows work.
+    const offeredTiers = (booking.offer && booking.offer.tiers) || [];
+    if (offeredTiers.length > 0 && !offeredTiers.includes(driver.driver?.tier)) {
+      return sendForbidden(res, 'This trip is not currently being offered to your tier');
+    }
+
+    // Atomic claim — only one driver can win
+    const claimed = await Booking.findOneAndUpdate(
+      { _id: bookingId, assignedDriver: null, status: 'Pending' },
+      {
+        $set: {
+          assignedDriver: driverId,
+          status: 'Confirmed',
+          'offer.stage': 0,
+          'offer.expiresAt': null,
+        },
+      },
+      { new: true },
+    );
+    if (!claimed) return sendError(res, 409, 'Trip already taken');
+
+    // Notify guest the driver is on the way (fire-and-forget)
+    try {
+      const guest = await User.findById(claimed.user);
+      if (guest) {
+        sendTripAlert(guest, 'guest_driver_assigned', {
+          driverName: driver.name,
+          when: formatTripTime(claimed.dates?.startDate),
+        }).catch(e => console.error('SMS guest_driver_assigned failed:', e?.message));
+      }
+    } catch (e) {
+      console.error('Guest accept-notification lookup failed:', e?.message || e);
+    }
+
+    // Diamond tier — instant payout (existing behavior preserved)
+    try {
+      if (driver.driver?.tier === 'Diamond') {
+        const BankAccount = require('../models/BankAccount');
+        const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+        const bank = await BankAccount.findOne({ driverId }).lean();
+        if (bank?.stripeAccountId && claimed.paymentStatus === 'Paid' && !claimed.PaidToDriver) {
+          const amountCents = computePayoutCents(claimed);
+          if (amountCents > 0) {
+            const transfer = await stripe.transfers.create({
+              amount: amountCents,
+              currency: 'usd',
+              destination: bank.stripeAccountId,
+              transfer_group: `booking:${claimed._id}`,
+            });
+            await Booking.updateOne(
+              { _id: claimed._id },
+              { $set: { PaidToDriver: true, payoutTransferId: transfer.id } },
+            );
+            console.log(`💸 Instant payout $${(amountCents / 100).toFixed(2)} → Diamond driver ${driver._id}`);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('⚠️ Instant payout failed:', e?.message || e);
+    }
+
+    const settings = await TierSettings.findOne().lean();
+    return sendSuccess(res, 200, 'Booking accepted successfully', toDriverBooking(claimed, driver, settings));
   } catch (error) {
     console.error('Accept Booking Error:', error);
     return sendError(res, 500, error.message || 'Failed to process booking action');
+  }
+});
+
+/**
+ * GET /api/bookings/open-trips
+ * Driver — lists pending bookings whose current offer stage includes the
+ * caller's tier and which they pass full eligibility on (vehicle/region/
+ * membership). Newest offers first.
+ */
+const getOpenTrips = asyncHandler(async (req, res) => {
+  try {
+    if (req.user.role !== 'driver') return sendForbidden(res, 'Drivers only');
+
+    const driver = await User.findById(req.user.id);
+    if (!driver) return sendNotFound(res, 'Driver not found');
+    if (driver.driver?.status !== 'approved') {
+      return sendForbidden(res, 'Only approved drivers can view open trips');
+    }
+
+    const candidates = await Booking.find({
+      status: 'Pending',
+      assignedDriver: null,
+      'offer.stage': { $gt: 0 },
+      'offer.tiers': driver.driver.tier,
+    })
+      .populate('region', 'name code')
+      .populate('vehicleType', 'name hourlyPrice')
+      .sort({ 'offer.offeredAt': -1 });
+
+    const eligible = candidates.filter((b) => evaluateDriver(driver, b).eligible);
+
+    const settings = await TierSettings.findOne().lean();
+    const dtos = eligible.map((b) => toDriverBooking(b, driver, settings));
+
+    return sendSuccess(res, 200, 'Open trips retrieved', dtos);
+  } catch (error) {
+    console.error('Get Open Trips Error:', error);
+    return sendError(res, 500, error.message || 'Failed to retrieve open trips');
+  }
+});
+
+/**
+ * POST /api/bookings/driver-cancel
+ * Driver — post-acceptance cancellation. Resets the booking to Pending so
+ * the admin can re-dispatch or reassign. Increments the driver's
+ * cancellationCount (admin settings convert that into rating/visibility
+ * penalties separately).
+ */
+const driverCancelBooking = asyncHandler(async (req, res) => {
+  try {
+    const { bookingId, reason } = req.body;
+    const driverId = req.user.id;
+
+    if (!bookingId) return sendValidationError(res, 'Booking ID is required');
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) return sendNotFound(res, 'Booking not found');
+    if (String(booking.assignedDriver) !== String(driverId)) {
+      return sendForbidden(res, 'You are not assigned to this booking');
+    }
+    if (['Completed', 'Cancelled', 'Expired'].includes(booking.status)) {
+      return sendValidationError(res, `Booking is already ${booking.status}`);
+    }
+
+    await Booking.updateOne(
+      { _id: bookingId },
+      {
+        $set: {
+          assignedDriver: null,
+          status: 'Pending',
+          'offer.stage': 0,
+          'offer.offeredAt': null,
+          'offer.expiresAt': null,
+          'offer.tiers': [],
+          cancellation: {
+            cancelledBy: driverId,
+            cancelledAt: new Date(),
+            reason: reason || null,
+          },
+        },
+      },
+    );
+
+    await User.updateOne(
+      { _id: driverId },
+      {
+        $inc: { 'driver.cancellationCount': 1 },
+        $set: { 'driver.lastCancellationAt': new Date() },
+      },
+    );
+
+    // Notify guest (fire-and-forget)
+    try {
+      const guest = await User.findById(booking.user);
+      if (guest) {
+        sendTripAlert(guest, 'guest_trip_cancelled', {})
+          .catch(e => console.error('SMS guest_trip_cancelled failed:', e?.message));
+      }
+    } catch (e) {
+      console.error('Driver-cancel guest notification failed:', e?.message || e);
+    }
+
+    return sendSuccess(res, 200, 'Booking cancelled — admin will reassign', {
+      bookingId,
+      status: 'Pending',
+    });
+  } catch (error) {
+    console.error('Driver Cancel Booking Error:', error);
+    return sendError(res, 500, error.message || 'Failed to cancel booking');
   }
 });
 
@@ -840,6 +971,8 @@ module.exports = {
   startBooking,
   confirmBooking,
   acceptBooking,
+  getOpenTrips,
+  driverCancelBooking,
   getAllBookings,
   getAdminBookingStats,
   getMyBookings,
