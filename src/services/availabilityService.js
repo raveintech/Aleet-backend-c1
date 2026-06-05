@@ -10,7 +10,12 @@
 //                                     serve the region
 //   RB  = Reserved Buffer          — 25% of AQD, rounded up, minimum 2
 //   CL  = Committed Load           — distinct drivers already assigned to
-//                                     active bookings with a same-day pickup
+//                                     active bookings whose trip window
+//                                     OVERLAPS the window being evaluated. A
+//                                     driver only counts as committed for the
+//                                     time their trip actually occupies, so a
+//                                     driver with a non-overlapping trip stays
+//                                     available for other slots that day.
 //   MCT = Minimum Coverage Threshold — 2 (1 primary + 1 backup)
 //
 // An admin can also force a region OFF via Region.sameDayManualBlock.
@@ -50,11 +55,28 @@ function qualifiedDriverFilter(regionId) {
 
 /**
  * Compute the same-day availability breakdown for a region document.
+ *
+ * Committed Load (CL) is measured against a time window. When evaluating a
+ * specific booking request, pass its trip window via opts so a driver is only
+ * counted as committed when their existing trip actually overlaps it — a driver
+ * busy at 8am does not block a 6pm slot. With no window supplied (the generic
+ * region-status views), CL falls back to the rolling next-24h window.
+ *
  * @param {object} region  A Region mongoose doc (or lean object).
+ * @param {object} [opts]
+ * @param {Date|string|number} [opts.windowStart]  Requested trip start (pickup).
+ * @param {Date|string|number} [opts.windowEnd]    Requested trip end (dropoff).
  * @returns {Promise<{aqd,rb,cl,mct,formulaPass,manualBlock,available,reason,message}>}
  */
-async function computeSameDayStatus(region) {
+async function computeSameDayStatus(region, opts = {}) {
   const regionId = region._id;
+
+  // Window the committed drivers are measured against. Default: rolling 24h.
+  const now = new Date();
+  const windowStart = opts.windowStart ? new Date(opts.windowStart) : now;
+  const windowEnd = opts.windowEnd
+    ? new Date(opts.windowEnd)
+    : new Date(now.getTime() + SAME_DAY_WINDOW_MS);
 
   const [aqd, committedDrivers, cfg] = await Promise.all([
     User.countDocuments(qualifiedDriverFilter(regionId)),
@@ -62,10 +84,10 @@ async function computeSameDayStatus(region) {
       region: regionId,
       status: { $in: ['Confirmed', 'In Progress'] },
       assignedDriver: { $ne: null },
-      'dates.startDate': {
-        $gte: new Date(),
-        $lte: new Date(Date.now() + SAME_DAY_WINDOW_MS),
-      },
+      // Time-window overlap: existing trip starts before the requested window
+      // ends AND finishes after it starts. Non-overlapping trips don't count.
+      'dates.startDate': { $lt: windowEnd },
+      'dates.endDate': { $gt: windowStart },
     }),
     loadSameDayConfig(),
   ]);
@@ -98,11 +120,15 @@ async function computeSameDayStatus(region) {
   return { aqd, rb, rbRatio, minRB, cl, mct, formulaPass, manualBlock, available, reason, message };
 }
 
-/** Same-day status for one region by id. Returns null if the region is gone. */
-async function getRegionSameDayStatus(regionId) {
+/**
+ * Same-day status for one region by id. Returns null if the region is gone.
+ * @param {string} regionId
+ * @param {object} [opts]  Forwarded to computeSameDayStatus (windowStart/windowEnd).
+ */
+async function getRegionSameDayStatus(regionId, opts = {}) {
   const region = await Region.findById(regionId);
   if (!region) return null;
-  return computeSameDayStatus(region);
+  return computeSameDayStatus(region, opts);
 }
 
 module.exports = {

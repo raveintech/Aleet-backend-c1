@@ -335,7 +335,12 @@ const startBooking = asyncHandler(async (req, res) => {
     const sameDayBooking =
       new Date(effectiveStartDate).getTime() - Date.now() <= 24 * 60 * 60 * 1000;
     if (!isAdminBooker && sameDayBooking) {
-      const sameDayStatus = await getRegionSameDayStatus(region);
+      // Measure committed drivers against THIS trip's window so a driver busy
+      // on a non-overlapping trip still counts toward available coverage.
+      const sameDayStatus = await getRegionSameDayStatus(region, {
+        windowStart: effectiveStartDate,
+        windowEnd: effectiveEndDate,
+      });
       if (sameDayStatus && !sameDayStatus.available) {
         return sendValidationError(
           res,
