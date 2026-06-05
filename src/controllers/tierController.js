@@ -134,7 +134,7 @@ const getTierSettings = asyncHandler(async (req, res) => {
 // ---------------------------------------------------------------------------
 const updateTierSettings = asyncHandler(async (req, res) => {
     try {
-        const { bookingFee, tiers } = req.body;
+        const { bookingFee, membershipRate, founder30Rate, sameDayMCT, sameDayMinRB, sameDayRBRatio, tiers } = req.body;
         const settings = await getOrCreateSettings();
 
         if (bookingFee !== undefined) {
@@ -142,6 +142,41 @@ const updateTierSettings = asyncHandler(async (req, res) => {
                 return sendValidationError(res, 'bookingFee must be a non-negative number');
             }
             settings.bookingFee = bookingFee;
+        }
+
+        if (membershipRate !== undefined) {
+            if (typeof membershipRate !== 'number' || membershipRate < 0) {
+                return sendValidationError(res, 'membershipRate must be a non-negative number');
+            }
+            settings.membershipRate = membershipRate;
+        }
+
+        if (founder30Rate !== undefined) {
+            if (typeof founder30Rate !== 'number' || founder30Rate < 0) {
+                return sendValidationError(res, 'founder30Rate must be a non-negative number');
+            }
+            settings.founder30Rate = founder30Rate;
+        }
+
+        if (sameDayMCT !== undefined) {
+            if (typeof sameDayMCT !== 'number' || sameDayMCT < 1) {
+                return sendValidationError(res, 'sameDayMCT must be a number >= 1');
+            }
+            settings.sameDayMCT = sameDayMCT;
+        }
+
+        if (sameDayMinRB !== undefined) {
+            if (typeof sameDayMinRB !== 'number' || sameDayMinRB < 0) {
+                return sendValidationError(res, 'sameDayMinRB must be a non-negative number');
+            }
+            settings.sameDayMinRB = sameDayMinRB;
+        }
+
+        if (sameDayRBRatio !== undefined) {
+            if (typeof sameDayRBRatio !== 'number' || sameDayRBRatio < 0 || sameDayRBRatio > 1) {
+                return sendValidationError(res, 'sameDayRBRatio must be a number between 0 and 1');
+            }
+            settings.sameDayRBRatio = sameDayRBRatio;
         }
 
         if (tiers && typeof tiers === 'object') {
