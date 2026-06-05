@@ -14,6 +14,9 @@ const tierSettingsSchema = new mongoose.Schema({
     bookingFee: { type: Number, default: 34 }, // admin-adjustable, applied per trip
     membershipRate: { type: Number, default: 89 }, // locked $/hr for standard members (any vehicle type)
     founder30Rate: { type: Number, default: 69 },  // locked $/hr for invite-only Founder 30 members
+    sameDayMCT: { type: Number, default: 2 },       // Minimum Coverage Threshold: AQD - RB - CL >= MCT
+    sameDayMinRB: { type: Number, default: 2 },     // Floor for Reserved Buffer (never below this even if 25% < 2)
+    sameDayRBRatio: { type: Number, default: 0.25 }, // Reserved Buffer = ceil(AQD × ratio), minimum sameDayMinRB
     tiers: {
         'S-Level': {
             type: tierConfigSchema,

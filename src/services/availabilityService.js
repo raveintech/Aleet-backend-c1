@@ -19,11 +19,19 @@
 const User = require('../models/User');
 const Booking = require('../models/Booking');
 const Region = require('../models/Region');
+const TierSettings = require('../models/TierSettings');
 
-const RB_RATIO = 0.25;                          // Reserved Buffer = 25% of AQD
-const MIN_RB = 2;
-const MCT = 2;                                  // 1 primary + 1 backup
 const SAME_DAY_WINDOW_MS = 24 * 60 * 60 * 1000; // pickup within 24h = same-day
+
+/** Load same-day formula config from TierSettings, with safe defaults. */
+async function loadSameDayConfig() {
+  const s = await TierSettings.findOne().lean();
+  return {
+    mct:     (s && typeof s.sameDayMCT     === 'number') ? s.sameDayMCT     : 2,
+    minRB:   (s && typeof s.sameDayMinRB   === 'number') ? s.sameDayMinRB   : 2,
+    rbRatio: (s && typeof s.sameDayRBRatio === 'number') ? s.sameDayRBRatio : 0.25,
+  };
+}
 
 // Mongo filter for Active Qualified Drivers serving a region.
 // Region binding is default-open: a driver serves everywhere unless
@@ -48,7 +56,7 @@ function qualifiedDriverFilter(regionId) {
 async function computeSameDayStatus(region) {
   const regionId = region._id;
 
-  const [aqd, committedDrivers] = await Promise.all([
+  const [aqd, committedDrivers, cfg] = await Promise.all([
     User.countDocuments(qualifiedDriverFilter(regionId)),
     Booking.distinct('assignedDriver', {
       region: regionId,
@@ -59,11 +67,12 @@ async function computeSameDayStatus(region) {
         $lte: new Date(Date.now() + SAME_DAY_WINDOW_MS),
       },
     }),
+    loadSameDayConfig(),
   ]);
 
+  const { mct, minRB, rbRatio } = cfg;
   const cl = committedDrivers.length;
-  const rb = Math.max(MIN_RB, Math.ceil(aqd * RB_RATIO));
-  const mct = MCT;
+  const rb = Math.max(minRB, Math.ceil(aqd * rbRatio));
   const formulaPass = aqd - rb - cl >= mct;
   const manualBlock = region.sameDayManualBlock === true;
   const regionInactive = region.isActive === false;
@@ -86,7 +95,7 @@ async function computeSameDayStatus(region) {
       'in this region. Please choose a later pickup time.';
   }
 
-  return { aqd, rb, cl, mct, formulaPass, manualBlock, available, reason, message };
+  return { aqd, rb, rbRatio, minRB, cl, mct, formulaPass, manualBlock, available, reason, message };
 }
 
 /** Same-day status for one region by id. Returns null if the region is gone. */
