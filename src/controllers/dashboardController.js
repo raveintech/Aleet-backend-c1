@@ -636,6 +636,16 @@ const getDriverTrips = asyncHandler(async (req, res) => {
         driverEarnings: Math.round(driverEarnings * 100) / 100,
         originalEarnings: originalEarnings ? Math.round(originalEarnings * 100) / 100 : null,
         completedAt: booking.completedAt ?? null,
+        specialNotes: booking.specialNotes ?? null,
+        stops: Array.isArray(booking.stops)
+          ? booking.stops.map((s) => ({
+              location: s.location,
+              arrivalTime: s.arrivalTime ?? null,
+              timeType: s.timeType ?? 'arrival',
+              dwellMinutes: s.dwellMinutes ?? 0,
+              notes: s.notes ?? null,
+            }))
+          : [],
       };
     });
 
