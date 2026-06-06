@@ -128,6 +128,7 @@ function toDriverBooking(booking, driver, settings) {
     pickupLocation: obj.pickupLocation,
     dropoffLocation: obj.dropoffLocation,
     stops: obj.stops,
+    specialNotes: obj.specialNotes,
     assignedDriver: obj.assignedDriver,
     addOns: obj.addOns,
     freeRouting: obj.freeRouting,
@@ -280,6 +281,7 @@ const startBooking = asyncHandler(async (req, res) => {
       region, startDate, endDate, vehicleTypeId, quantity,
       stops = [], addOns = [], freeRouting = false,
       pickupLocation, dropoffLocation, adminOverride: bodyAdminOverride,
+      specialNotes,
       bookingMode = 'multi_day',
       durationHours,
       duration
@@ -435,8 +437,10 @@ const startBooking = asyncHandler(async (req, res) => {
         arrivalTime: s.time || s.arrivalTime || s.pickupTime,
         timeType: s.timeType || (s.pickupTime ? 'pickup' : 'arrival'),
         dwellMinutes: Number(s.dwellMinutes || 0),
+        notes: s.notes || null,
         addOnIds: s.addOnIds
       })),
+      specialNotes: typeof specialNotes === 'string' ? specialNotes.trim() || null : null,
       addOns: safeAddOnIds,
       freeRouting: effectiveFreeRouting,
       regularPrice: adjustedRegular,

@@ -13,6 +13,9 @@ const stopSchema = new mongoose.Schema({
 
   dwellMinutes: { type: Number, default: 0 },
 
+  // Optional: free-text note for this specific stop (gate codes, contact, etc.)
+  notes: { type: String, default: null },
+
   // Optional: per-stop add-ons
   addOnIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'AddOn' }]
 }, { _id: false });
@@ -55,6 +58,9 @@ const bookingSchema = new mongoose.Schema({
 
   // New stop structure (arrivalTime + dwellMinutes)
   stops: [stopSchema],
+
+  // Trip-level special notes / instructions (visible to the assigned & offered driver)
+  specialNotes: { type: String, default: null },
 
   assignedDriver: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 
