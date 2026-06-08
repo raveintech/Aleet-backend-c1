@@ -115,6 +115,9 @@ async function getDistanceMiles(origin, destination) {
         return element.distanceMeters / 1609.344;
     } catch (err) {
         console.error('[Routes API] getDistanceMiles error:', err.message);
+        if (err.response?.data) {
+            console.error('[Routes API] details:', JSON.stringify(err.response.data));
+        }
         return null;
     }
 }
@@ -143,6 +146,9 @@ async function getDriveSeconds(origin, destination, departureIsoUtc) {
         return isNaN(sec) ? null : sec;
     } catch (err) {
         console.error('[Routes API] getDriveSeconds error:', err.message);
+        if (err.response?.data) {
+            console.error('[Routes API] details:', JSON.stringify(err.response.data));
+        }
         return null;
     }
 }

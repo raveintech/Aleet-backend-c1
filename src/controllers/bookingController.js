@@ -384,16 +384,27 @@ const startBooking = asyncHandler(async (req, res) => {
       routeValidation = await validateItinerary(itinerary, { bufferMinutes: 15 });
       const isAdmin = ['admin', 'staff'].includes(req.user.role);
       _adminOverride = !!bodyAdminOverride && isAdmin;
-      if (!routeValidation.allOk && !_adminOverride) {
-        const firstFail = routeValidation.legs.find((l) => !l.ok) || routeValidation.legs[0];
-        const mins = firstFail?.minRequiredGapSec ? Math.ceil(firstFail.minRequiredGapSec / 60) : 'unknown';
+
+      // Distinguish two failure modes:
+      //   1. Routes API couldn't compute the ETA (minRequiredGapSec === null).
+      //      That's a 3rd-party hiccup, not the guest's fault — let the booking
+      //      through with dispatchFlag so admin can review.
+      //   2. The drive time WAS computed but the guest didn't give enough gap.
+      //      That's a real validation error — show "Minimum required time is X mins".
+      const realConflict = routeValidation.legs.find((l) => !l.ok && l.minRequiredGapSec != null);
+      const apiUnavailable = !routeValidation.allOk && !realConflict;
+
+      if (realConflict && !_adminOverride) {
+        const mins = Math.ceil(realConflict.minRequiredGapSec / 60);
         return sendValidationError(
           res,
-          `Minimum required time is ${mins} mins for "${firstFail.from} → ${firstFail.to}".`,
+          `Minimum required time is ${mins} mins for "${realConflict.from} → ${realConflict.to}".`,
           { routeValidation }
         );
       }
-      _dispatchFlag = _adminOverride && !routeValidation.allOk;
+      // Either a real conflict that admin overrode, or the Routes API couldn't
+      // validate at least one leg — flag for internal review either way.
+      _dispatchFlag = (_adminOverride && !routeValidation.allOk) || apiUnavailable;
     }
 
     const currentMonth = `${new Date(effectiveStartDate).getFullYear()}-${String(new Date(effectiveStartDate).getMonth() + 1).padStart(2, '0')}`;

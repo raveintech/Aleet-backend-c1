@@ -21,11 +21,16 @@ const stopSchema = new mongoose.Schema({
 }, { _id: false });
 
 
+// Persisted output of validateItinerary. plannedDeparture / plannedArrival
+// are populated only by the legacy routingValidator path; the active
+// validateItinerary in bookingHelpers.js doesn't compute them, so they're
+// optional here. plannedGapSec / neededGapSec / reason are the fields the
+// active validator emits.
 const routeLegSchema = new mongoose.Schema({
   from: { type: String, required: true },
   to: { type: String, required: true },
-  plannedDeparture: { type: Date, required: true },
-  plannedArrival: { type: Date, required: true },
+  plannedDeparture: { type: Date },
+  plannedArrival: { type: Date },
   api: {
     distanceMeters: Number,
     durationSec: Number,
@@ -34,8 +39,11 @@ const routeLegSchema = new mongoose.Schema({
   },
   bufferMinutes: { type: Number, default: 15 },
   minRequiredGapSec: Number,
+  neededGapSec: Number,
+  plannedGapSec: Number,
   actualGapSec: Number,
   ok: Boolean,
+  reason: String,
   recommendation: String
 }, { _id: false });
 
