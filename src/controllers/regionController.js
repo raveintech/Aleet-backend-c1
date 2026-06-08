@@ -47,7 +47,18 @@ const getSameDayStatus = async (req, res) => {
         const region = await Region.findById(req.params.id);
         if (!region) return sendNotFound(res, 'Region not found');
 
-        const status = await computeSameDayStatus(region);
+        // Optional trip window — when the booking flow passes the intended
+        // pickup/dropoff, Committed Load is measured against THAT window, so a
+        // driver whose existing trips don't overlap the requested slot still
+        // counts as available. Without it, computeSameDayStatus falls back to
+        // the rolling next-24h window. Invalid/absent dates are ignored.
+        const opts = {};
+        const start = req.query.startDate ? new Date(req.query.startDate) : null;
+        const end = req.query.endDate ? new Date(req.query.endDate) : null;
+        if (start && !Number.isNaN(start.getTime())) opts.windowStart = start;
+        if (end && !Number.isNaN(end.getTime())) opts.windowEnd = end;
+
+        const status = await computeSameDayStatus(region, opts);
         return sendSuccess(res, 200, 'Same-day status retrieved', {
             regionId: region._id,
             ...status,
