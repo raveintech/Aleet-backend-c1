@@ -1,7 +1,9 @@
 const express = require('express');
+const http = require('http');
 const dotenv = require('dotenv');
 const path = require('path');
 const connectDB = require('./config/db'); // 🟢 DB connection
+const initSockets = require('./sockets');
 
 // Load environment variables
 dotenv.config({ path: require('path').resolve(__dirname, '../.env') });
@@ -82,6 +84,20 @@ setInterval(() => {
   });
 }, 60 * 1000);
 
-// Start server
+// Start server — wrap in http.createServer so Socket.IO can attach to the
+// same port. AQD presence (driver online/offline) runs over the /drivers
+// namespace; see src/sockets/.
 const PORT = process.env.PORT;
-app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+const httpServer = http.createServer(app);
+initSockets(httpServer);
+
+// Presence sweeper — safety net for crashed sockets. Marks any driver
+// offline if their last socket activity was >5 min ago.
+const { runPresenceSweep } = require('./cron/presenceSweeper');
+setInterval(() => {
+  runPresenceSweep().catch((e) => {
+    console.error('Presence sweep error:', e?.message || e);
+  });
+}, 2 * 60 * 1000);
+
+httpServer.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));

@@ -257,6 +257,13 @@ const toggleDriverStatus = async (req, res) => {
       driver.driver.revisionNotes = null;
     }
 
+    // If the driver is no longer approved, immediately drop them from AQD
+    // by flipping the presence flag. The cron sweeper would catch this
+    // eventually, but suspending an active driver should be instant.
+    if (driver.driver.status !== 'approved') {
+      driver.driver.isOnline = false;
+    }
+
     // Update background check if provided
     if (typeof backgroundCheck === 'boolean') {
       driver.driver.backgroundCheck = backgroundCheck;
@@ -308,6 +315,8 @@ const formatDriverForAdmin = (driver) => ({
     regions: Array.isArray(driver.driver?.regions) ? driver.driver.regions : [],
     serveAllRegions: driver.driver?.serveAllRegions !== false,
     revisionNotes: driver.driver?.revisionNotes || null,
+    isOnline: !!driver.driver?.isOnline,
+    lastSeenAt: driver.driver?.lastSeenAt || null,
     checkr: driver.driver?.checkr
       ? {
         status: driver.driver.checkr.status,
