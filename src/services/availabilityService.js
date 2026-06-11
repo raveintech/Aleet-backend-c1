@@ -7,7 +7,9 @@
 //     AQD - RB - CL >= MCT
 //
 //   AQD = Active Qualified Drivers  — approved Diamond + approved Pro who
-//                                     serve the region
+//                                     serve the region AND are currently
+//                                     online (active socket connection,
+//                                     lastSeenAt within the last 5 min)
 //   RB  = Reserved Buffer          — 25% of AQD, rounded up, minimum 2
 //   CL  = Committed Load           — distinct drivers already assigned to
 //                                     active bookings whose trip window
@@ -27,6 +29,7 @@ const Region = require('../models/Region');
 const TierSettings = require('../models/TierSettings');
 
 const SAME_DAY_WINDOW_MS = 24 * 60 * 60 * 1000; // pickup within 24h = same-day
+const PRESENCE_FRESHNESS_MS = 5 * 60 * 1000;    // driver lastSeenAt must be within 5 min
 
 /** Load same-day formula config from TierSettings, with safe defaults. */
 async function loadSameDayConfig() {
@@ -39,6 +42,8 @@ async function loadSameDayConfig() {
 }
 
 // Mongo filter for Active Qualified Drivers serving a region.
+// AQD = approved Diamond/Pro drivers serving this region AND currently
+// online (socket connected, lastSeenAt within PRESENCE_FRESHNESS_MS).
 // Region binding is default-open: a driver serves everywhere unless
 // serveAllRegions is explicitly false with a restricted regions list.
 function qualifiedDriverFilter(regionId) {
@@ -46,6 +51,8 @@ function qualifiedDriverFilter(regionId) {
     role: 'driver',
     'driver.status': 'approved',
     'driver.tier': { $in: ['Diamond', 'Pro'] },
+    'driver.isOnline': true,
+    'driver.lastSeenAt': { $gte: new Date(Date.now() - PRESENCE_FRESHNESS_MS) },
     $or: [
       { 'driver.serveAllRegions': { $ne: false } },
       { 'driver.regions': regionId },
