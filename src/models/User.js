@@ -101,12 +101,6 @@ const userSchema = new mongoose.Schema(
       cancellationCount: { type: Number, default: 0 },
       lastCancellationAt: { type: Date, default: null },
 
-      // Socket-driven presence — populated by sockets/driverPresence.js
-      // when the driver app opens a Socket.IO connection. AQD reads
-      // isOnline === true AND lastSeenAt within freshness window
-      // (gated by process.env.AQD_PRESENCE_ENABLED).
-      isOnline: { type: Boolean, default: false },
-      lastSeenAt: { type: Date, default: null },
       hasForHireLicense: { type: Boolean, default: false },
       hasOwnVehicle: { type: Boolean, default: false },
       authorizeBackgroundCheck: { type: Boolean, default: false },

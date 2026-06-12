@@ -1,5 +1,5 @@
 const express = require('express');
-const { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, autoAssignDriverToBooking, redispatchBooking, unassignDriverFromBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard } = require('../controllers/adminController');
+const { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, autoAssignDriverToBooking, redispatchBooking, unassignDriverFromBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard, getOnlineDrivers } = require('../controllers/adminController');
 const { getDriverTierPerformance, getTierSettings, updateTierSettings } = require('../controllers/tierController');
 const authenticateJWT = require('../middleware/authMiddleware');
 const requireAdmin = require('../middleware/requireAdmin');
@@ -18,6 +18,11 @@ router.patch('/bookings/:id/unassign', requireAdmin, requirePermission('manage-b
 // Driver listing & licensing
 router.get('/drivers', requireAdmin, requirePermission('manage-users'), getAllDrivers);
 router.get('/drivers/licensing', requireAdmin, requirePermission('manage-users'), getDriverLicensing);
+
+// Live presence snapshot — currently-connected driver IDs on THIS backend
+// instance. The admin UI also receives the same data via the /admin socket's
+// `driver:presence:snapshot` event on connect.
+router.get('/drivers/online', requireAdmin, requirePermission('manage-users'), getOnlineDrivers);
 
 // Driver approval actions
 router.patch('/drivers/approve', requireAdmin, requirePermission('manage-users'), approveDriver);

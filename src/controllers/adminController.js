@@ -257,12 +257,9 @@ const toggleDriverStatus = async (req, res) => {
       driver.driver.revisionNotes = null;
     }
 
-    // If the driver is no longer approved, immediately drop them from AQD
-    // by flipping the presence flag. The cron sweeper would catch this
-    // eventually, but suspending an active driver should be instant.
-    if (driver.driver.status !== 'approved') {
-      driver.driver.isOnline = false;
-    }
+    // Presence is in-memory now (presenceRegistry); the next AQD query
+    // automatically excludes this driver because the qualified-driver
+    // filter requires `driver.status === 'approved'`. No DB flip needed.
 
     // Update background check if provided
     if (typeof backgroundCheck === 'boolean') {
@@ -315,8 +312,6 @@ const formatDriverForAdmin = (driver) => ({
     regions: Array.isArray(driver.driver?.regions) ? driver.driver.regions : [],
     serveAllRegions: driver.driver?.serveAllRegions !== false,
     revisionNotes: driver.driver?.revisionNotes || null,
-    isOnline: !!driver.driver?.isOnline,
-    lastSeenAt: driver.driver?.lastSeenAt || null,
     checkr: driver.driver?.checkr
       ? {
         status: driver.driver.checkr.status,
@@ -708,4 +703,20 @@ const getAdminDashboard = async (req, res) => {
   }
 };
 
-module.exports = { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, autoAssignDriverToBooking, redispatchBooking, unassignDriverFromBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard };
+/**
+ * GET /api/admin/drivers/online
+ * Returns the snapshot of currently-connected driver IDs from this backend
+ * instance's in-memory presence registry. Useful for non-socket admin
+ * tooling (curl, dashboards) and a fallback when the admin UI's socket
+ * hasn't connected yet.
+ */
+const getOnlineDrivers = (req, res) => {
+  const { getOnlineIds } = require('../sockets/presenceRegistry');
+  const userIds = getOnlineIds();
+  return sendSuccess(res, 200, 'Online drivers retrieved', {
+    userIds,
+    count: userIds.length,
+  });
+};
+
+module.exports = { toggleDriverStatus, assignDriverToBooking, getEligibleDriversForBooking, autoAssignDriverToBooking, redispatchBooking, unassignDriverFromBooking, getAllDrivers, approveDriver, requestRevision, uploadAleetLicense, updateDriverRegions, getDriverLicensing, getSidebarStats, getAdminDashboard, getOnlineDrivers };

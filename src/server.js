@@ -91,13 +91,5 @@ const PORT = process.env.PORT;
 const httpServer = http.createServer(app);
 initSockets(httpServer);
 
-// Presence sweeper — safety net for crashed sockets. Marks any driver
-// offline if their last socket activity was >5 min ago.
-const { runPresenceSweep } = require('./cron/presenceSweeper');
-setInterval(() => {
-  runPresenceSweep().catch((e) => {
-    console.error('Presence sweep error:', e?.message || e);
-  });
-}, 2 * 60 * 1000);
 
 httpServer.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));

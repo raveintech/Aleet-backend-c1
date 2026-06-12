@@ -6,30 +6,29 @@
 //
 //     AQD - RB - CL >= MCT
 //
-//   AQD = Active Qualified Drivers  — approved Diamond + approved Pro who
-//                                     serve the region AND are currently
-//                                     online (active socket connection,
-//                                     lastSeenAt within the last 5 min)
+//   AQD = Active Qualified Drivers — approved Diamond + approved Pro who
+//                                    serve the region AND have an active
+//                                    Socket.IO connection on THIS backend
+//                                    instance (in-memory presence, never
+//                                    DB-backed — local dev cannot pollute
+//                                    production's AQD even on a shared DB).
 //   RB  = Reserved Buffer          — 25% of AQD, rounded up, minimum 2
 //   CL  = Committed Load           — distinct drivers already assigned to
-//                                     active bookings whose trip window
-//                                     OVERLAPS the window being evaluated. A
-//                                     driver only counts as committed for the
-//                                     time their trip actually occupies, so a
-//                                     driver with a non-overlapping trip stays
-//                                     available for other slots that day.
+//                                    active bookings whose trip window
+//                                    OVERLAPS the window being evaluated.
 //   MCT = Minimum Coverage Threshold — 2 (1 primary + 1 backup)
 //
 // An admin can also force a region OFF via Region.sameDayManualBlock.
 // ---------------------------------------------------------------------------
 
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Booking = require('../models/Booking');
 const Region = require('../models/Region');
 const TierSettings = require('../models/TierSettings');
+const { getOnlineIds } = require('../sockets/presenceRegistry');
 
 const SAME_DAY_WINDOW_MS = 24 * 60 * 60 * 1000; // pickup within 24h = same-day
-const PRESENCE_FRESHNESS_MS = 5 * 60 * 1000;    // driver lastSeenAt must be within 5 min
 
 /** Load same-day formula config from TierSettings, with safe defaults. */
 async function loadSameDayConfig() {
@@ -41,18 +40,27 @@ async function loadSameDayConfig() {
   };
 }
 
-// Mongo filter for Active Qualified Drivers serving a region.
-// AQD = approved Diamond/Pro drivers serving this region AND currently
-// online (socket connected, lastSeenAt within PRESENCE_FRESHNESS_MS).
-// Region binding is default-open: a driver serves everywhere unless
-// serveAllRegions is explicitly false with a restricted regions list.
+/**
+ * Mongo filter for Active Qualified Drivers serving a region.
+ *
+ * Presence intersection — the registry returns userIds currently connected
+ * to THIS backend instance. We pass them as an `$in: [...]` on `_id` so
+ * the qualified-driver query naturally yields zero when no drivers are
+ * connected (empty array → empty `$in` → no matches).
+ *
+ * Region binding is default-open: a driver serves everywhere unless
+ * `serveAllRegions: false` with a restricted regions list.
+ */
 function qualifiedDriverFilter(regionId) {
+  const onlineIds = getOnlineIds()
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
   return {
     role: 'driver',
     'driver.status': 'approved',
     'driver.tier': { $in: ['Diamond', 'Pro'] },
-    'driver.isOnline': true,
-    'driver.lastSeenAt': { $gte: new Date(Date.now() - PRESENCE_FRESHNESS_MS) },
+    _id: { $in: onlineIds },
     $or: [
       { 'driver.serveAllRegions': { $ne: false } },
       { 'driver.regions': regionId },
